@@ -56,6 +56,7 @@
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html { height: 100%; scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 80px); }
   body {
     margin: 0;
@@ -380,6 +381,8 @@ const state = {
   q: "", cat: "", sort: { key: "fecha", dir: "desc" }
 };
 const charts = {};
+
+$("monthLabel").textContent = `${MESES[state.m]} ${state.y}`;
 
 /* ---------- Clave ---------- */
 function readKey() {
