@@ -423,30 +423,63 @@ function showKeyForm(msg) {
 }
 
 /* ---------- Datos ---------- */
+const CACHE_KEY = "gastos_cache_v1";
+function readCache() { try { return JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); } catch { return null; } }
+function writeCache(d) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch {} }
+function clearCache() { try { localStorage.removeItem(CACHE_KEY); } catch {} }
+const fmtUpdated = iso => new Date(iso).toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
 async function load() {
   const btn = $("refresh");
   btn.classList.add("spinning"); btn.disabled = true;
-  $("app").classList.add("loading");
+  if (!state.all.length) $("app").classList.add("loading");
   try {
     if (state.demo) {
       state.all = demoData();
       state.updated = new Date().toISOString();
       $("demoPill").hidden = false;
-    } else {
-      const k = readKey();
-      if (!k) { showKeyForm(); $("updated").textContent = "Falta la clave"; return; }
-      const res = await fetch(`${WORKER_URL}?k=${encodeURIComponent(k)}`, { cache: "no-store" });
-      if (res.status === 401) { clearKey(); showKeyForm("La clave no es correcta."); return; }
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      state.all = (data.gastos || []).filter(g => g.fecha && typeof g.monto === "number");
-      state.updated = data.updated;
+      hideNotice();
+      render();
+      return;
     }
+
+    const k = readKey();
+    if (!k) { showKeyForm(); $("updated").textContent = "Falta la clave"; return; }
+
+    // 1) Mostrar al instante lo último guardado en el dispositivo
+    const cached = readCache();
+    if (cached && cached.gastos && !state.all.length) {
+      state.all = cached.gastos;
+      state.updated = cached.updated;
+      hideNotice();
+      render();
+      $("app").classList.remove("loading");
+    }
+    if (state.all.length) $("updated").textContent = "Actualizando…";
+
+    // 2) Traer lo nuevo por detrás
+    const res = await fetch(`${WORKER_URL}?k=${encodeURIComponent(k)}`, { cache: "no-store" });
+    if (res.status === 401) {
+      clearKey(); clearCache(); state.all = [];
+      showKeyForm("La clave no es correcta.");
+      $("updated").textContent = "Falta la clave";
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    state.all = (data.gastos || []).filter(g => g.fecha && typeof g.monto === "number");
+    state.updated = data.updated;
+    writeCache({ updated: state.updated, gastos: state.all });
     hideNotice();
     render();
   } catch (err) {
-    showNotice(`<h2>No se pudieron cargar los gastos</h2><p>${esc(err.message)}. Probá actualizar en un rato.</p>`, true);
-    $("updated").textContent = "Error al actualizar";
+    if (state.all.length) {
+      showNotice(`<h2>Sin conexión con Notion</h2><p>Mostrando lo guardado del ${esc(fmtUpdated(state.updated))} · ${esc(err.message)}</p>`, true);
+      $("updated").textContent = "Datos guardados del " + fmtUpdated(state.updated);
+    } else {
+      showNotice(`<h2>No se pudieron cargar los gastos</h2><p>${esc(err.message)}. Probá actualizar en un rato.</p>`, true);
+      $("updated").textContent = "Error al actualizar";
+    }
   } finally {
     btn.classList.remove("spinning"); btn.disabled = false;
     $("app").classList.remove("loading");
@@ -542,9 +575,7 @@ function render() {
   $("nextMonth").disabled = isCurrent;
   const earliest = state.all.reduce((min, g) => g.fecha < min ? g.fecha : min, curKey);
   $("prevMonth").disabled = key <= earliest.slice(0, 7);
-  $("updated").textContent = state.updated
-    ? "Actualizado " + new Date(state.updated).toLocaleString("es-AR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
-    : "";
+  $("updated").textContent = state.updated ? "Actualizado " + fmtUpdated(state.updated) : "";
 
   // KPI total + delta
   $("kTotal").textContent = fmt(total);
