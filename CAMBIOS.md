@@ -9,7 +9,7 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 
 ## Estado actual
 
-- **Publicado en Cloudflare:** sin confirmar. Los cambios del 25 y 26/10 se publican con `npx wrangler deploy` desde la carpeta del proyecto.
+- **Publicación:** automática. Desde el 26/10, Cloudflare (Settings → Build) está conectado al repositorio de GitHub, rama `main`: cada vez que se sube algo, la app se publica sola en uno o dos minutos. Ya no hace falta `npx wrangler deploy`.
 - **Versión de la base de datos:** v3 (foto de colección, publicidad a varios productos, packaging vinculado). Se actualiza sola en la primera visita después de publicar.
 - **Pendientes / dudas abiertas:**
   - Confirmar que la 3.ª categoría es **Moldería** (salió de un audio que decía "mueblería / mordería").
