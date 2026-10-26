@@ -2,7 +2,7 @@
   // Mismo nombre que el Worker que ya existe: se reemplaza y conserva sus secretos (DASH_KEY, NOTION_*).
   "name": "gastos-desgoises",
   "main": "src/worker.js",
-  "compatibility_date": "2026-10-01",
+  "compatibility_date": "2026-10-19",
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -13,7 +13,11 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "desgoises-gastos" }
   ],
-  // Conserva las variables de texto cargadas en el panel (por ejemplo NOTION_DATABASE_ID).
-  "keep_vars": true,
+  // Base de Notion de donde se importan los gastos viejos (Gestionar → Importar). El token va como secreto.
+  "vars": {
+    "NOTION_DATABASE_ID": "79341305d5c38361ac5101751e95a768",
+    "NOTION_DATA_SOURCE_ID": "13941305-d5c3-8312-923b-876780acac8b"
+  },
+  "preview_urls": false,
   "observability": { "enabled": true }
 }
