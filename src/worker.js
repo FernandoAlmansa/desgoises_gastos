@@ -14,7 +14,7 @@ const TZ = "America/Argentina/Buenos_Aires";
 // Columnas que la app puede escribir en cada tabla.
 const TABLES = {
   opciones: ["tipo", "nombre", "orden", "archivada"],
-  colecciones: ["nombre", "archivada"],
+  colecciones: ["nombre", "foto_id", "archivada"],
   productos: ["nombre", "coleccion_id", "foto_id", "archivado"],
   tandas: ["producto_id", "nombre", "coleccion_id", "cant_estimada", "cant_final", "estado", "cerrada"],
   muestras: ["nombre", "producto_id", "archivada"],
@@ -25,10 +25,12 @@ const TABLES = {
     "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id",
   ],
   pagos: ["gasto_id", "fecha", "monto", "medio_pago"],
+  producto_packaging: ["producto_id", "gasto_id", "por_prenda"],
 };
 const REQUIRED = {
   opciones: ["tipo", "nombre"], colecciones: ["nombre"], productos: ["nombre"], tandas: ["producto_id", "nombre"],
   muestras: ["nombre"], campanas: ["nombre"], gastos: ["fecha", "monto"], pagos: ["gasto_id", "fecha", "monto"],
+  producto_packaging: ["producto_id", "gasto_id"],
 };
 // Qué tablas no se pueden borrar si un gasto las usa.
 const REFERENCED_BY_GASTOS = {
@@ -95,6 +97,9 @@ async function api(request, env, url) {
   if (parts[0] === "campanas" && parts[2] === "tandas" && method === "PUT") {
     return json(await setCampaignTandas(db, int(parts[1]), await request.json()));
   }
+  if (parts[0] === "gastos" && parts[2] === "tandas" && method === "PUT") {
+    return json(await setGastoTandas(db, int(parts[1]), await request.json()));
+  }
   if (path === "tanda_conceptos" && method === "PUT") {
     const b = await request.json();
     if (b.estado) {
@@ -155,7 +160,8 @@ async function requireAuth(request, env) {
 
 async function allData(db) {
   const q = (sql) => db.prepare(sql).all().then((r) => r.results);
-  const [opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, ajustes, historial] =
+  const [opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, ajustes, historial,
+    gastoTandas, productoPackaging] =
     await Promise.all([
       q("SELECT * FROM opciones ORDER BY tipo, orden, nombre"),
       q("SELECT * FROM colecciones ORDER BY creado DESC"),
@@ -169,9 +175,12 @@ async function allData(db) {
       q("SELECT * FROM pagos ORDER BY fecha, id"),
       q("SELECT * FROM ajustes WHERE clave != 'schema'"),
       q("SELECT * FROM historial ORDER BY id DESC LIMIT 500"),
+      q("SELECT * FROM gasto_tandas"),
+      q("SELECT * FROM producto_packaging ORDER BY id"),
     ]);
   return {
     opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, historial,
+    gastoTandas, productoPackaging,
     ajustes: Object.fromEntries(ajustes.map((a) => [a.clave, safeParse(a.valor)])),
   };
 }
@@ -189,6 +198,10 @@ function clean(table, body, partial) {
     if (v !== null && col === "kg") {
       v = Math.round(Number(v) * 1000) / 1000;
       if (!Number.isFinite(v) || v < 0) throw new HttpError(400, "Kilos inválidos");
+    }
+    if (v !== null && col === "por_prenda") {
+      v = Math.round(Number(v) * 100) / 100;
+      if (!Number.isFinite(v) || v <= 0) throw new HttpError(400, "La cantidad por prenda tiene que ser mayor a cero");
     }
     if (["estimado", "en_cantidad", "cerrada", "archivada", "archivado"].includes(col)) v = v ? 1 : 0;
     if (typeof v === "string") v = v.trim().slice(0, 500);
@@ -256,16 +269,21 @@ async function deleteRow(db, table, id) {
     if (g) stmts.push(db.prepare("INSERT INTO historial (entidad, entidad_id, tanda_id, detalle) VALUES ('gastos', ?, ?, ?)")
       .bind(id, g.tanda_id, JSON.stringify({ borrado: [g.descripcion || g.concepto || g.categoria, g.monto] })));
     stmts.push(db.prepare("DELETE FROM pagos WHERE gasto_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE gasto_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM producto_packaging WHERE gasto_id = ?").bind(id));
   }
   if (table === "tandas") {
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE tanda_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM tanda_conceptos WHERE tanda_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE tanda_id = ?").bind(id));
   }
   if (table === "campanas") stmts.push(db.prepare("DELETE FROM campana_tandas WHERE campana_id = ?").bind(id));
   if (table === "productos") {
     const t = await db.prepare("SELECT COUNT(*) AS n FROM gastos WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id).first();
     if (t.n > 0) throw new HttpError(409, "Tiene gastos asociados. Archivalo en lugar de borrarlo.");
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id));
+    stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id));
+    stmts.push(db.prepare("DELETE FROM producto_packaging WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM tandas WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("UPDATE muestras SET producto_id = NULL WHERE producto_id = ?").bind(id));
   }
@@ -281,6 +299,14 @@ async function setCampaignTandas(db, campanaId, body) {
   const ids = [...new Set((body.tanda_ids || []).map(int))];
   const stmts = [db.prepare("DELETE FROM campana_tandas WHERE campana_id = ?").bind(campanaId)];
   for (const t of ids) stmts.push(db.prepare("INSERT INTO campana_tandas (campana_id, tanda_id) VALUES (?, ?)").bind(campanaId, t));
+  await db.batch(stmts);
+  return { ok: true };
+}
+
+async function setGastoTandas(db, gastoId, body) {
+  const ids = [...new Set((body.tanda_ids || []).map(int))];
+  const stmts = [db.prepare("DELETE FROM gasto_tandas WHERE gasto_id = ?").bind(gastoId)];
+  for (const t of ids) stmts.push(db.prepare("INSERT INTO gasto_tandas (gasto_id, tanda_id) VALUES (?, ?)").bind(gastoId, t));
   await db.batch(stmts);
   return { ok: true };
 }

@@ -207,16 +207,27 @@ function vResumen() {
   const pagado = M.sum(D.pagos.filter((p) => inPeriod(p.fecha, per)).map((p) => M.of(I.gasto.get(p.gasto_id)?.moneda, p.monto)));
   const pendiente = M.sum(D.gastos.map((g) => M.of(g.moneda, pagoInfo(I, g).pendiente)));
 
+  // Mismo orden que al cargar un gasto.
   const porCat = [...CATEGORIAS, { key: null, nombre: "Sin categoría" }].map((c) => {
     const gs = gastos.filter((g) => (g.categoria || null) === c.key);
-    return { c, total: tot(gs), n: gs.length };
-  }).filter((x) => x.n).sort((a, b) => M.get(b.total) - M.get(a.total));
-  // Equipamiento va aparte: una compra grande no es un gasto habitual del mes.
+    return { c, gs, total: tot(gs), n: gs.length };
+  }).filter((x) => x.n);
+  // Equipamiento y packaging van aparte: son compras grandes o de insumos, no gastos habituales del mes.
   const equipo = porCat.find((x) => x.c.key === "equipamiento");
-  const habituales = porCat.filter((x) => x !== equipo);
-  const catRow = ({ c, total, n }) => `<li><a class="row" href="#/movimientos?cat=${c.key || "sin"}&per=${per}">
-          <span class="row-main"><span class="row-title">${esc(c.nombre)}</span><span class="row-sub">${plural(n, "gasto")}</span></span>
-          <span class="row-end"><b class="money">${moneyM(total)}</b></span>${icon("right", "chev")}</a></li>`;
+  const pack = porCat.find((x) => x.c.key === "packaging");
+  const habituales = porCat.filter((x) => x !== equipo && x !== pack);
+  const aparte = [equipo && `${moneyM(equipo.total)} de equipamiento`, pack && `${moneyM(pack.total)} de packaging`].filter(Boolean);
+  const MAX_MINI = 5;
+  const catGroup = ({ c, gs, total, n }) => {
+    const todos = `#/movimientos?cat=${c.key || "sin"}&per=${per}`;
+    const lista = gs.slice().sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id);
+    return `<li class="cat-group"><a class="row" href="${todos}">
+          <span class="row-main"><span class="row-title">${esc(c.corto || c.nombre)}</span><span class="row-sub">${plural(n, "gasto")}</span></span>
+          <span class="row-end"><b class="money">${moneyM(total)}</b></span>${icon("right", "chev")}</a>
+        <ul class="mini-list">${lista.slice(0, MAX_MINI).map((g) => `<li><a class="mini-row" href="#/gasto/${g.id}">
+          <span class="mini-name">${esc((g.descripcion || "").trim() || gastoTitulo(I, g))}</span><span class="money">${money(g.monto, g.moneda)}</span></a></li>`).join("")}
+          ${n > MAX_MINI ? `<li><a class="mini-row more" href="${todos}">Ver los ${n}</a></li>` : ""}</ul></li>`;
+  };
 
   const activas = D.tandas.filter((t) => !t.cerrada && t.estado !== "finalizada" && !I.producto.get(t.producto_id)?.archivado &&
     (t.estado === "produccion" || (I.gastosDeTanda.get(t.id) || []).length));
@@ -229,21 +240,20 @@ function vResumen() {
       <section class="card" aria-label="Totales del período">
         <div class="hero-label">Gastos registrados · ${per.length === 4 ? per : monthName(per)}</div>
         <div class="hero-value money">${moneyM(total)}</div>
-        <div class="hero-sub">${plural(gastos.length, "gasto")}${equipo ? ` · incluye ${moneyM(equipo.total)} de equipamiento` : ""}</div>
+        <div class="hero-sub">${plural(gastos.length, "gasto")}${aparte.length ? ` · incluye ${aparte.join(" y ")}` : ""}</div>
         <div class="stats">
           <div class="stat"><span>Pagado en el período</span><b class="money">${moneyM(pagado)}</b></div>
           <div class="stat"><span>Saldo pendiente (total)</span><b class="money">${moneyM(pendiente)}</b></div>
         </div>
       </section>
 
-      <h2 class="section-label">Para completar</h2>
+      ${al.length ? `<h2 class="section-label">Para completar</h2>
       <section class="card flush" aria-label="Avisos">
-        ${al.length ? `<ul class="list" id="avisos">${al.map((a, n) => `<li ${n >= 6 ? "hidden" : ""}><a class="row alert-row" href="${a.ruta}">
+        <ul class="list" id="avisos">${al.map((a, n) => `<li ${n >= 6 ? "hidden" : ""}><a class="row alert-row" href="${a.ruta}">
           <span class="ico-box">${icon(a.tipo === "saldo" ? "wallet" : a.tipo === "duplicado" ? "file" : "alert", "sm")}</span>
           <span class="row-main"><span class="row-title">${esc(a.texto)}${a.monto ? ` <b class="money">${moneyM(a.monto)}</b>` : ""}</span></span>${icon("right", "chev")}</a></li>`).join("")}</ul>
-          ${al.length > 6 ? `<button class="btn ghost block" id="more-av">Ver ${al.length - 6} más</button>` : ""}`
-          : `<div class="empty">${icon("check_circle", "lg")}Todo al día. No falta completar nada.</div>`}
-      </section>
+          ${al.length > 6 ? `<button class="btn ghost block" id="more-av">Ver ${al.length - 6} más</button>` : ""}
+      </section>` : ""}
 
       <h2 class="section-label">Producciones activas</h2>
       <section class="card flush">
@@ -258,10 +268,11 @@ function vResumen() {
 
       <h2 class="section-label">Por categoría</h2>
       <section class="card flush">
-        ${habituales.length ? `<ul class="list">${habituales.map(catRow).join("")}</ul>`
+        ${habituales.length ? `<ul class="list">${habituales.map(catGroup).join("")}</ul>`
           : `<div class="empty">Sin gastos en este período.<button class="btn sm" data-add>${icon("plus", "sm")} Añadir gasto</button></div>`}
       </section>
-      ${equipo ? `<h2 class="section-label">Equipamiento (aparte)</h2><section class="card flush"><ul class="list">${catRow(equipo)}</ul></section>` : ""}
+      ${equipo ? `<h2 class="section-label">Equipamiento (aparte)</h2><section class="card flush"><ul class="list">${catGroup(equipo)}</ul></section>` : ""}
+      ${pack ? `<h2 class="section-label">Packaging y presentación (aparte)</h2><section class="card flush"><ul class="list">${catGroup(pack)}</ul></section>` : ""}
       <p class="hint" style="margin:0 4px">Esta app registra gastos y costos. Para conocer caja, ganancias o stock hace falta registrar ventas y saldos.</p>`,
     bind() {
       bindPeriod(() => S.mes, (p) => { S.mes = p; render(); });
@@ -341,21 +352,23 @@ function vProducto(id, q) {
   const { tandas, actual } = productoResumen(I, id);
   const sel = tandas.find((c) => c.tanda.id === Number(q.get("tanda"))) || actual || tandas[0];
   const t = sel.tanda, u = sel.unidades, L = sel.lineas;
-  const cob = D.ajustes.cobertura;
   const linked = I.muestrasDeProducto.get(id) || [];
   const hist = D.historial.filter((h) => h.tanda_id === t.id);
   const conceptosProd = D.opciones.filter((o) => o.tipo === "concepto_prod" && !o.archivada).map((o) => o.nombre);
   const extraConceptos = [...new Set(L.produccion.gastos.map((g) => g.concepto || "Sin concepto"))].filter((c) => !conceptosProd.includes(c));
   const cerrada = !!t.cerrada;
 
-  const levelVal = (m) => (u.n ? moneyM(M.scale(m, 1 / u.n), true) : "—");
-  const refVal = u.n && cob?.porUnidad != null ? moneyM(M.add(M.scale(sel.directo, 1 / u.n), { ARS: cob.porUnidad }), true) : null;
-
-  const sinProduccion = !L.produccion.gastos.length;
-  const lineFold = (title, m, gs, extra, vacio) => fold({
-    title, total: !gs.length && vacio ? vacio : moneyM(m), extra: u.n && !M.isZero(m) ? `${perUnit(m, u.n)} por unidad` : extra || "",
+  const lineFold = (title, m, gs, vacio) => fold({
+    title, total: !gs.length && vacio ? vacio : moneyM(m), extra: u.n && !M.isZero(m) ? `${perUnit(m, u.n)} por unidad` : "",
     body: gs.length ? `<ul class="list">${gs.map((g) => gastoRow(g)).join("")}</ul>` : `<p class="hint" style="margin:0">Sin gastos asignados.</p>`,
   });
+  const totalRow = (title, m, cls) => `<div class="row total-row ${cls}"><span class="row-main"><span class="row-title">${title}</span></span>
+    <span class="row-end"><b class="money">${moneyM(m)}</b>${u.n ? `<span class="row-sub">${perUnit(m, u.n)} por unidad</span>` : ""}</span></div>`;
+  const packRows = L.packaging.items.map((x) => packRow(x, u)).join("");
+  const linkPackBtn = `<button class="row add" data-linkp><span class="ico-box">${icon("link")}</span><span class="row-main">Vincular packaging</span></button>`;
+  const publiRows = [...L.publicidad.gastos.map((g) => gastoRow(g)), L.publicidad.coleccion ? publiColRow(L.publicidad.coleccion) : "",
+    ...L.publicidad.multi.map(publiMultiRow)].join("");
+  const unidadesRow = `<div class="row units-row"><span class="row-main"><span class="row-title">Unidades</span></span><span class="row-end"><b class="num">${unitsTxt(u)}</b></span></div>`;
 
   return {
     title: p.nombre,
@@ -363,14 +376,8 @@ function vProducto(id, q) {
     action: `<button class="icon-btn" data-action aria-label="Editar producto">${icon("pencil")}</button>`,
     onAction: () => editarProducto(p),
     html: `
-      <div class="product-photo ${p.foto_id ? "" : "empty-photo"}">
-        ${p.foto_id ? `<img src="${fileUrl(p.foto_id)}" alt="Foto de ${esc(p.nombre)}">` : `<div class="empty" style="padding:0">${icon("image", "lg")}<span class="small">Sin foto</span></div>`}
-        <button class="btn secondary sm photo-btn" id="photo">${icon("camera", "sm")} ${p.foto_id ? "Cambiar foto" : "Agregar foto"}</button>
-        <input type="file" id="photo-in" accept="image/*" hidden>
-      </div>
-      <div>
-        <div class="row-sub" style="font-size:15px">${esc(I.coleccion.get(p.coleccion_id)?.nombre || "Sin colección")}${p.archivado ? " · Archivado" : ""}</div>
-      </div>
+      ${photoHead(p.foto_id, `Foto de ${p.nombre}`, `<span class="hero-label">Colección</span>
+        <b class="head-value">${esc(I.coleccion.get(p.coleccion_id)?.nombre || "Sin colección")}${p.archivado ? " · Archivado" : ""}</b>`)}
 
       <div class="chips scroll" role="tablist" aria-label="Tandas">
         ${tandas.map((c) => `<a class="chip" role="tab" href="#/producto/${id}?tanda=${c.tanda.id}" aria-pressed="${c.tanda.id === t.id}" aria-selected="${c.tanda.id === t.id}">${c.tanda.cerrada ? icon("lock", "sm") : ""}${esc(c.tanda.nombre)}</a>`).join("")}
@@ -390,22 +397,20 @@ function vProducto(id, q) {
         </div>
         ${t.cant_final != null && t.cant_estimada != null && t.cant_final !== t.cant_estimada ? `<p class="hint" style="margin:-8px 0 0">Se estimaron ${fmtInt(t.cant_estimada)} y quedaron ${fmtInt(t.cant_final)} (${t.cant_final > t.cant_estimada ? "+" : ""}${fmtInt(t.cant_final - t.cant_estimada)}).</p>` : ""}
         ${sel.avisos.map((a) => `<div class="note warn">${icon("alert", "sm")}<span>${esc(a)}</span></div>`).join("")}
-
-        <div class="levels" aria-label="Costo por unidad">
-          <div class="level main"><span class="l-name">Costo de producción por unidad</span><span class="l-val money">${sinProduccion ? "Pendiente" : levelVal(L.produccion.total)}</span></div>
-          <div class="level"><span class="l-name">Con desarrollo, campaña y publicidad</span><span class="l-val money">${levelVal(sel.directo)}</span></div>
-          <div class="level"><span class="l-name">Costo de referencia para evaluar precio${cob?.porUnidad != null ? `<span class="sub xs" style="display:block">Incluye ${money(cob.porUnidad, "ARS", true)} de gastos generales (simulación ${esc(monthName(cob.mes))}, ${fmtInt(cob.ventas)} ventas)</span>` : ""}</span>
-            <span class="l-val money">${refVal || (cob ? "—" : `<a class="btn ghost sm" href="#/simular">Simular</a>`)}</span></div>
-        </div>
-        <p class="hint" style="margin:-4px 0 0">${u.n ? `Por unidad sobre ${unitsTxt(u)}.` : ""} No incluye comisiones, envíos, packaging ni otros gastos generales de la marca.</p>
       </section>
 
-      <h2 class="section-label">De dónde sale</h2>
-      <section class="card flush">
-        ${lineFold("Producción", L.produccion.total, L.produccion.gastos, "", "Pendiente")}
+      <h2 class="section-label">Balance</h2>
+      <section class="card flush balance">
+        ${lineFold("Producción", L.produccion.total, L.produccion.gastos, "Pendiente")}
         ${L.desarrollo.aplica
           ? lineFold("Muestras y moldería", L.desarrollo.total, L.desarrollo.gastos)
           : fold({ title: "Muestras y moldería", total: "—", extra: "En Primera producción", body: `<p class="hint" style="margin:0">El desarrollo se cuenta una sola vez, en la primera tanda del producto, para no duplicarlo.</p>` })}
+        ${fold({
+          title: "Packaging", total: moneyM(L.packaging.total),
+          extra: u.n && !M.isZero(L.packaging.total) ? `${perUnit(L.packaging.total, u.n)} por unidad` : "",
+          body: `${packRows ? `<ul class="list">${packRows}</ul>` : `<p class="hint" style="margin:0 0 8px">Todavía no tiene packaging vinculado.</p>`}${linkPackBtn}`,
+        })}
+        ${totalRow("Total de fabricación y desarrollo", sel.fabricacion, "subtotal")}
         ${fold({
           title: "Campaña asignada", total: moneyM(L.campana.total),
           extra: u.n && !M.isZero(L.campana.total) ? `${perUnit(L.campana.total, u.n)} por unidad` : "",
@@ -415,27 +420,27 @@ function vProducto(id, q) {
               <span class="row-end"><b class="money">${c.monto ? moneyM(c.monto) : "Pendiente"}</b>${c.info.estado === "estimado" ? '<span class="badge info">Estimado</span>' : c.info.estado === "falta_cantidad" ? '<span class="badge warn">Pendiente</span>' : ""}</span></a></li>`).join("")}</ul>`
             : `<p class="hint" style="margin:0">No participa en campañas. Se agrega desde la ficha de la campaña.</p>`,
         })}
-        ${L.publicidad.coleccion ? fold({
+        ${fold({
           title: "Publicidad asignada", total: moneyM(L.publicidad.total),
           extra: u.n && !M.isZero(L.publicidad.total) ? `${perUnit(L.publicidad.total, u.n)} por unidad` : "",
-          body: `<ul class="list">${L.publicidad.gastos.map((g) => gastoRow(g)).join("")}${publiColRow(L.publicidad.coleccion)}</ul>`,
-        }) : lineFold("Publicidad asignada", L.publicidad.total, L.publicidad.gastos)}
-        <div class="row" style="font-weight:650"><span class="row-main">Total directo asignado</span>
-          <span class="row-end"><b class="money">${moneyM(sel.directo)}</b>${u.n ? `<span class="row-sub">${perUnit(sel.directo, u.n)} por unidad</span>` : ""}</span></div>
+          body: publiRows ? `<ul class="list">${publiRows}</ul>` : `<p class="hint" style="margin:0">Sin gastos asignados.</p>`,
+        })}
+        ${totalRow("Total directo asignado", sel.directo, "grand")}
       </section>
-      ${(L.publicidad.gastos.length || L.publicidad.coleccion) && u.n ? `<p class="hint" style="margin:0 4px">Publicidad asignada por unidad producida: ${perUnit(L.publicidad.total, u.n)}. No es el costo de conseguir una venta.</p>` : ""}
+      <p class="hint" style="margin:0 4px">${u.n ? `Por unidad sobre ${unitsTxt(u).replace(/\.$/, "")}. ` : ""}No incluye comisiones, envíos ni otros gastos generales de la marca.</p>
 
       <h2 class="section-label">Rendimiento de tela</h2>
       ${telaCard(sel.tela, u)}
 
       <h2 class="section-label">Conceptos de producción</h2>
       <section class="card flush"><ul class="list">
+        <li>${unidadesRow}</li>
         ${[...conceptosProd, ...extraConceptos].map((c) => {
           const gs = L.produccion.gastos.filter((g) => (g.concepto || "Sin concepto") === c);
           const na = I.noAplica.has(`${t.id}|${c}`);
           const kg = esTela(c) ? gs.reduce((s, g) => s + (g.kg || 0), 0) : 0;
           let end;
-          if (gs.length) end = `<b class="money">${moneyM(tot(gs))}</b>${gs.some((g) => g.estimado) ? '<span class="badge info">Estimado</span>' : '<span class="badge ok">Confirmado</span>'}`;
+          if (gs.length) end = `<b class="money">${moneyM(tot(gs))}</b>${u.n ? `<span class="row-sub">${perUnit(tot(gs), u.n)} por unidad</span>` : ""}${gs.some((g) => g.estimado) ? '<span class="badge info">Estimado</span>' : '<span class="badge ok">Confirmado</span>'}`;
           else if (na) end = `<span class="badge">No aplica</span>`;
           else end = `<span class="badge warn">Pendiente</span>`;
           return `<li><div class="row"><span class="row-main"><span class="row-title">${esc(c)}</span>${kg ? `<span class="row-sub">${fmtKg(kg)} kg</span>` : ""}</span><span class="row-end">${end}</span>
@@ -457,20 +462,19 @@ function vProducto(id, q) {
       </section>
       <p class="hint" style="margin:0 4px">Vincular no duplica el gasto: es el mismo gasto visto desde la muestra y desde el producto.</p>
 
+      <h2 class="section-label">Packaging de cada prenda</h2>
+      <section class="card flush">
+        ${packRows ? `<ul class="list">${packRows}</ul>` : ""}
+        ${linkPackBtn}
+      </section>
+      <p class="hint" style="margin:0 4px">Se calcula con el precio por unidad de cada compra de packaging. La compra sigue figurando una sola vez en el Resumen.</p>
+
       ${hist.length ? `<details class="card" style="padding:0"><summary class="row" style="border:0">${icon("history")}<span class="row-main">Historial de cambios (${hist.length})</span>${icon("down", "chev")}</summary>
         <ul class="list" style="padding:0 16px 8px">${hist.map((h) => `<li class="row" style="padding:8px 0;min-height:0"><span class="row-main"><span class="row-sub">${esc(fmtDate(h.fecha.slice(0, 10)))}</span><span class="small" style="white-space:normal">${esc(histText(h))}</span></span></li>`).join("")}</ul></details>` : ""}
 
       <button class="btn ghost" id="edit-t">Editar tanda</button>`,
     bind() {
-      $("#photo").onclick = () => $("#photo-in").click();
-      $("#photo-in").onchange = async (e) => {
-        const f = e.target.files[0];
-        if (!f) return;
-        await busy($("#photo"), async () => {
-          const up = await uploadFile(f, { photo: true });
-          await patch("productos", id, { foto_id: up.id }, "Foto guardada");
-        }).catch(() => {});
-      };
+      bindPhoto("productos", id);
       $$("[data-estado]").forEach((b) => (b.onclick = () => patch("tandas", t.id, { estado: b.dataset.estado }).catch((e) => toast(e.message, true))));
       const qty = (inp, col) => {
         inp.oninput = () => (inp.value = inp.value.replace(/\D/g, ""));
@@ -514,8 +518,48 @@ function vProducto(id, q) {
       };
       $("#edit-t").onclick = () => editarTanda(t, tandas.length);
       $("#link-m").onclick = () => vincularMuestra(id);
+      $$("[data-linkp]").forEach((b) => (b.onclick = () => vincularPackaging(id)));
+      $$("[data-pack]").forEach((b) => (b.onclick = () => editarPackaging(L.packaging.items.find((x) => x.link.id === Number(b.dataset.pack)))));
     },
   };
+}
+
+// Foto cuadrada y más chica que el ancho de la pantalla, con los datos al costado.
+function photoHead(fotoId, alt, meta) {
+  return `<div class="photo-head">
+    <div class="sq-photo">${fotoId ? `<img src="${fileUrl(fotoId)}" alt="${esc(alt)}">` : `<span class="sq-empty">${icon("image", "lg")}<span class="small">Sin foto</span></span>`}</div>
+    <div class="photo-meta">${meta}
+      <button class="btn secondary sm" id="photo">${icon("camera", "sm")} ${fotoId ? "Cambiar foto" : "Agregar foto"}</button>
+      <input type="file" id="photo-in" accept="image/*" hidden></div>
+  </div>`;
+}
+function bindPhoto(table, id) {
+  $("#photo").onclick = () => $("#photo-in").click();
+  $("#photo-in").onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    await busy($("#photo"), async () => {
+      const up = await uploadFile(f, { photo: true });
+      await patch(table, id, { foto_id: up.id }, "Foto guardada");
+    }).catch(() => {});
+  };
+}
+
+const fmtCant = (n) => fmtKg(n, 2);
+const packNombre = (x) => [x.opcion?.nombre, (x.gasto.descripcion || "").trim()].filter(Boolean).join(" · ") || "Packaging";
+function packRow(x, u) {
+  return `<li><button class="row" data-pack="${x.link.id}"><span class="ico-box">${icon("package")}</span>
+    <span class="row-main"><span class="row-title wrap">${esc(packNombre(x))}</span>
+    <span class="row-sub wrap">${fmtCant(x.link.por_prenda)} por prenda · ${x.unit != null ? `${money(x.unit, x.gasto.moneda, true)} c/u` : "falta la cantidad comprada"}</span></span>
+    <span class="row-end"><b class="money">${x.monto ? moneyM(x.monto) : "—"}</b>${x.unit != null ? `<span class="row-sub">${money(x.unit * x.link.por_prenda, x.gasto.moneda, true)} por unidad</span>` : '<span class="badge warn">Pendiente</span>'}</span></button></li>`;
+}
+
+function publiMultiRow({ gasto: g, info, monto }) {
+  const nombres = info.parts.map((p) => S.I.producto.get(p.tanda.producto_id)?.nombre).filter(Boolean).join(", ");
+  return `<li><a class="row" href="#/gasto/${g.id}">
+    <span class="row-main"><span class="row-title wrap">${esc((g.descripcion || "").trim() || "Publicidad")}</span>
+    <span class="row-sub wrap">Total ${money(g.monto, g.moneda)} · repartido entre ${esc(nombres)}</span></span>
+    <span class="row-end"><b class="money">${monto ? moneyM(monto) : "Pendiente"}</b>${info.estado === "estimado" ? '<span class="badge info">Estimado</span>' : info.estado === "falta_cantidad" ? '<span class="badge warn">Pendiente</span>' : ""}</span></a></li>`;
 }
 
 function publiColRow(pc) {
@@ -528,6 +572,17 @@ function publiColRow(pc) {
 
 const consumoTxt = (kg) => (kg < 1 ? `${fmtInt(Math.round(kg * 1000))} g` : `${fmtKg(kg)} kg`);
 
+function telaLevels(x, u, pct) {
+  const est = u.estimada ? " (estimado)" : "";
+  return `<div class="levels" aria-label="Rendimiento de tela">
+      <div class="level main"><span class="l-name">Rendimiento${est}</span><span class="l-val num">${x.unidadesPorKg ? `${fmtKg(x.unidadesPorKg)} u. por kg` : "—"}</span></div>
+      <div class="level"><span class="l-name">Consumo por prenda${est}</span><span class="l-val num">${x.kgPorUnidad ? consumoTxt(x.kgPorUnidad) : "—"}</span></div>
+      <div class="level"><span class="l-name">Tela comprada<span class="sub xs" style="display:block">${moneyM(x.total)} · ${moneyM(x.porKg, true)} por kg</span></span><span class="l-val num">${fmtKg(x.kg)} kg</span></div>
+      ${pct != null ? `<div class="level"><span class="l-name">Del total de tela</span><span class="l-val num">${fmtKg(pct, 1)} %</span></div>` : ""}
+      <div class="level"><span class="l-name">Unidades que salieron</span><span class="l-val num">${u.n == null ? "—" : unitsTxt(u)}</span></div>
+    </div>`;
+}
+
 function telaCard(tela, u) {
   if (!tela.hayTela) {
     return `<section class="card"><p class="hint" style="margin:0">Cuando cargues la compra de tela (Producción → concepto Tela) con los kilos, acá vas a ver cuántas prendas salen por kilo.</p></section>`;
@@ -535,20 +590,22 @@ function telaCard(tela, u) {
   if (!tela.kg) {
     return `<section class="card"><div class="note warn" style="margin:0">${icon("alert", "sm")}<span>${tela.sinKg === 1 ? "La compra de tela no tiene" : `Las ${tela.sinKg} compras de tela no tienen`} los kilos cargados. Editala${tela.sinKg === 1 ? "" : "s"} y agregá los kg para ver el rendimiento.</span></div></section>`;
   }
-  const est = u.estimada ? " (estimado)" : "";
   return `<section class="card stack">
-    <div class="levels" aria-label="Rendimiento de tela">
-      <div class="level main"><span class="l-name">Rendimiento${est}</span><span class="l-val num">${tela.unidadesPorKg ? `${fmtKg(tela.unidadesPorKg)} u. por kg` : "—"}</span></div>
-      <div class="level"><span class="l-name">Consumo por prenda${est}</span><span class="l-val num">${tela.kgPorUnidad ? consumoTxt(tela.kgPorUnidad) : "—"}</span></div>
-      <div class="level"><span class="l-name">Tela comprada<span class="sub xs" style="display:block">${moneyM(tela.total)} · ${moneyM(tela.porKg, true)} por kg</span></span><span class="l-val num">${fmtKg(tela.kg)} kg</span></div>
-      <div class="level"><span class="l-name">Unidades que salieron</span><span class="l-val num">${u.n == null ? "—" : unitsTxt(u)}</span></div>
-    </div>
-    ${tela.telas.length > 1 ? `<ul class="list">${tela.telas.map((x) => `<li class="row" style="padding:8px 0">
-      <span class="row-main"><span class="row-title">${esc(x.nombre)}</span><span class="row-sub money">${fmtKg(x.kg)} kg · ${moneyM(x.porKg, true)} por kg</span></span>
-      <span class="row-end"><b class="num">${x.unidadesPorKg ? `${fmtKg(x.unidadesPorKg)} u./kg` : "—"}</b>${x.kgPorUnidad ? `<span class="row-sub">${consumoTxt(x.kgPorUnidad)} por prenda</span>` : ""}</span></li>`).join("")}</ul>` : ""}
+    ${telaLevels(tela, u)}
     ${u.n == null ? `<p class="hint" style="margin:0">Cargá la cantidad de unidades para calcular el rendimiento.</p>` : ""}
     ${tela.sinKg ? `<p class="hint" style="margin:0">${plural(tela.sinKg, "compra")} de tela sin kilos no entra${tela.sinKg === 1 ? "" : "n"} en el cálculo.</p>` : ""}
-  </section>`;
+  </section>
+  <h3 class="sub-label">Telas utilizadas</h3>
+  <section class="card flush">
+    ${tela.telas.slice().sort((a, b) => b.kg - a.kg).map((x) => {
+      const pct = (x.kg / tela.kg) * 100;
+      return fold({
+        title: esc(x.nombre), total: `${fmtKg(pct, 1)} %`, extra: `${fmtKg(x.kg)} kg`,
+        body: telaLevels(x, u, pct),
+      });
+    }).join("")}
+  </section>
+  <p class="hint" style="margin:0 4px">Cada tela se separa por el nombre que le pusiste en la descripción al cargar el gasto.</p>`;
 }
 
 const CAMPOS = { monto: "Importe", cant_estimada: "Cantidad estimada", cant_final: "Cantidad final", estado: "Estado", cerrada: "Cerrada",
@@ -625,6 +682,112 @@ function vincularMuestra(productoId) {
   });
 }
 
+// Elegís el insumo (bolsa, sticker…), y si hay varias compras, cuál. El precio por unidad sale de esa compra.
+function vincularPackaging(productoId) {
+  const I = S.I;
+  const yaVinculados = new Set((I.packagingDeProducto.get(productoId) || []).map((l) => l.gasto_id));
+  const opciones = S.data.opciones.filter((o) => o.tipo === "packaging" && !o.archivada);
+  const comprasDe = (o) => (I.gastosDeOpcion.get(o.id) || []).filter((g) => !yaVinculados.has(g.id))
+    .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id);
+  const precio = (g) => (g.cantidad ? `${fmtInt(g.cantidad)} u. · ${money(g.monto / g.cantidad, g.moneda, true)} c/u` : "Sin cantidad cargada");
+  sheet({
+    title: "Vincular packaging",
+    render: ({ body, close, setTitle }) => {
+      const elegirInsumo = () => {
+        setTitle("Vincular packaging");
+        body.innerHTML = opciones.length ? `<div class="card flush"><ul class="list">${opciones.map((o) => {
+          const n = comprasDe(o).length;
+          return `<li><button class="row" data-o="${o.id}"><span class="ico-box">${icon("package")}</span>
+            <span class="row-main"><span class="row-title">${esc(o.nombre)}</span><span class="row-sub">${n ? plural(n, "compra") : "Sin compras para vincular"}</span></span>${icon("right", "chev")}</button></li>`;
+        }).join("")}</ul></div>` : `<div class="empty">No hay insumos de packaging.</div>`;
+        $$("[data-o]", body).forEach((b) => (b.onclick = () => {
+          const o = I.opcion.get(Number(b.dataset.o));
+          const compras = comprasDe(o);
+          if (!compras.length) return sinCompras(o);
+          if (compras.length === 1) return confirmar(compras[0], o);
+          elegirCompra(o, compras);
+        }));
+      };
+      const sinCompras = (o) => {
+        setTitle(o.nombre);
+        body.innerHTML = `<div class="stack"><div class="note">${icon("package", "sm")}<span>Todavía no hay una compra de ${esc(o.nombre)} para vincular. Cargala con la cantidad de unidades y después vinculala acá.</span></div>
+          <button class="btn block" id="pk-cargar">${icon("plus")} Cargar compra de ${esc(o.nombre)}</button>
+          <button class="btn ghost block" id="pk-back">Volver</button></div>`;
+        $("#pk-cargar", body).onclick = () => { close(); openCarga(ctx, null, { categoria: "packaging", opcion_id: o.id }); };
+        $("#pk-back", body).onclick = elegirInsumo;
+      };
+      const elegirCompra = (o, compras) => {
+        setTitle(`¿Qué ${o.nombre.toLowerCase()}?`);
+        body.innerHTML = `<div class="card flush"><ul class="list">${compras.map((g) => `<li><button class="row" data-g="${g.id}">
+          <span class="row-main"><span class="row-title wrap">${esc((g.descripcion || "").trim() || fmtDateLong(g.fecha))}</span><span class="row-sub">${esc(precio(g))}</span></span>
+          <span class="row-end"><b class="money">${money(g.monto, g.moneda)}</b></span></button></li>`).join("")}</ul></div>
+          <button class="btn ghost block" id="pk-back">Volver</button>`;
+        $$("[data-g]", body).forEach((b) => (b.onclick = () => confirmar(I.gasto.get(Number(b.dataset.g)), o)));
+        $("#pk-back", body).onclick = elegirInsumo;
+      };
+      const confirmar = (g, o) => {
+        setTitle(o.nombre);
+        body.innerHTML = `<form class="stack">
+          <div class="note">${icon("package", "sm")}<span>${esc((g.descripcion || "").trim() || o.nombre)} · ${esc(precio(g))}</span></div>
+          ${g.cantidad ? "" : `<div class="field"><label for="pk-cant">¿Cuántas unidades trajo esa compra?</label>
+            <input id="pk-cant" class="input" inputmode="numeric" placeholder="Ej.: 500" required></div>`}
+          <div class="field"><label for="pk-pp">Cuántas lleva cada prenda</label>
+            <input id="pk-pp" class="input" inputmode="decimal" value="1" required></div>
+          <button class="btn block">${icon("link")} Vincular</button>
+          <button type="button" class="btn ghost block" id="pk-back">Volver</button></form>`;
+        const cant = $("#pk-cant", body);
+        if (cant) cant.oninput = () => { const n = cant.value.replace(/\D/g, ""); cant.value = n ? Number(n).toLocaleString("es-AR") : ""; };
+        $("#pk-back", body).onclick = elegirInsumo;
+        const f = $("form", body);
+        f.onsubmit = (e) => {
+          e.preventDefault();
+          const pp = Number($("#pk-pp", body).value.replace(",", "."));
+          if (!(pp > 0)) return toast("Poné cuántas lleva cada prenda (por ejemplo, 1)", true);
+          busy($("button", f), async () => {
+            if (cant) await api(`gastos/${g.id}`, { method: "PATCH", body: { cantidad: Number(cant.value.replace(/\D/g, "")) } });
+            await api("producto_packaging", { method: "POST", body: { producto_id: productoId, gasto_id: g.id, por_prenda: pp } });
+            await reload();
+            toast("Packaging vinculado");
+            close();
+          }).catch(() => {});
+        };
+      };
+      elegirInsumo();
+    },
+  });
+}
+
+function editarPackaging(x) {
+  if (!x) return;
+  sheet({
+    title: packNombre(x),
+    render: ({ body, close }) => {
+      body.innerHTML = `<form class="stack">
+        <div class="note">${icon("package", "sm")}<span>${x.unit != null ? `${money(x.unit, x.gasto.moneda, true)} c/u (${money(x.gasto.monto, x.gasto.moneda)} ÷ ${fmtInt(x.gasto.cantidad)} u.)` : "La compra no tiene la cantidad de unidades. Editala para calcular el precio."}</span></div>
+        <div class="field"><label for="pk-pp">Cuántas lleva cada prenda</label>
+          <input id="pk-pp" class="input" inputmode="decimal" value="${esc(fmtCant(x.link.por_prenda))}" required></div>
+        <button class="btn block">Guardar</button>
+        <div class="btn-row"><a class="btn secondary" href="#/gasto/${x.gasto.id}" id="pk-ver">Ver la compra</a>
+          <button type="button" class="btn danger" id="pk-del">${icon("trash", "sm")} Desvincular</button></div>
+      </form>`;
+      const f = $("form", body);
+      f.onsubmit = (e) => {
+        e.preventDefault();
+        const pp = Number($("#pk-pp", body).value.replace(",", "."));
+        if (!(pp > 0)) return toast("Poné cuántas lleva cada prenda (por ejemplo, 1)", true);
+        busy($("button", f), async () => { await patch("producto_packaging", x.link.id, { por_prenda: pp }, "Guardado"); close(); }).catch(() => {});
+      };
+      $("#pk-ver", body).onclick = () => close();
+      $("#pk-del", body).onclick = () => busy($("#pk-del", body), async () => {
+        await api(`producto_packaging/${x.link.id}`, { method: "DELETE" });
+        await reload();
+        toast("Packaging desvinculado");
+        close();
+      }).catch(() => {});
+    },
+  });
+}
+
 /* ================= Colecciones ================= */
 
 function vColecciones() {
@@ -635,15 +798,16 @@ function vColecciones() {
     title: "Colecciones",
     html: `
       <div class="btn-row"><button class="btn" id="new-col">${icon("plus")} Nueva colección</button></div>
-      <section class="card flush">
-        ${cols.length ? `<ul class="list">${cols.map((c) => {
+      ${cols.length ? `<div class="col-grid">${cols.map((c) => {
           const cc = coleccionCosts(I, c.id);
-          return `<li><a class="row" href="#/coleccion/${c.id}"><span class="ico-box">${icon("layers")}</span>
-            <span class="row-main"><span class="row-title">${esc(c.nombre)}</span>
-            <span class="row-sub">${plural(cc.productos.length, "producto")} · ${plural(cc.campanas.length, "campaña")}${M.isZero(cc.pendiente) ? "" : ` · pendiente ${moneyM(cc.pendiente)}`}</span></span>
-            <span class="row-end"><b class="money">${moneyM(cc.total)}</b><span class="row-sub">directo</span></span></a></li>`;
-        }).join("")}</ul>` : `<div class="empty">${S.verArchivados ? "No hay colecciones archivadas." : "Todavía no hay colecciones."}</div>`}
-      </section>
+          return `<a class="col-tile" href="#/coleccion/${c.id}">
+            ${c.foto_id ? `<img src="${fileUrl(c.foto_id)}" alt="" loading="lazy">` : `<span class="col-ph">${icon("layers", "lg")}</span>`}
+            <span class="col-info">
+              <span class="col-name">${esc(c.nombre)}</span>
+              <span class="col-sub">${plural(cc.productos.length, "producto")} · ${plural(cc.campanas.length, "campaña")}${M.isZero(cc.pendiente) ? "" : ` · pendiente ${moneyM(cc.pendiente)}`}</span>
+              <span class="col-total"><b class="money">${moneyM(cc.total)}</b> directo</span>
+            </span></a>`;
+        }).join("")}</div>` : `<section class="card"><div class="empty">${S.verArchivados ? "No hay colecciones archivadas." : "Todavía no hay colecciones."}</div></section>`}
       ${nArch || S.verArchivados ? `<button class="btn ghost" id="arch">${S.verArchivados ? "Ver colecciones activas" : `Ver archivadas (${nArch})`}</button>` : ""}
       <h2 class="section-label">Campañas de contenido</h2>
       <section class="card flush">${campanasList(D.campanas.filter((c) => !c.archivada))}
@@ -702,6 +866,8 @@ function vColeccion(id) {
     action: `<button class="icon-btn" data-action aria-label="Editar colección">${icon("pencil")}</button>`,
     onAction: () => editarSimple("colecciones", c, "colección"),
     html: `
+      ${photoHead(c.foto_id, `Foto de la colección ${c.nombre}`, `<span class="hero-label">Productos</span>
+        <b class="head-value">${plural(cc.productos.length, "producto")} · ${plural(cc.campanas.length, "campaña")}</b>`)}
       <section class="card">
         <div class="hero-label">Total directo de la colección</div>
         <div class="hero-value money">${moneyM(cc.total)}</div>
@@ -739,6 +905,7 @@ function vColeccion(id) {
       <section class="card flush">${campanasList(cc.campanas)}
         <button class="row add" id="new-camp"><span class="ico-box">${icon("plus")}</span><span class="row-main">Nueva campaña en esta colección</span></button></section>`,
     bind() {
+      bindPhoto("colecciones", id);
       $("#new-camp").onclick = () => nuevaCampana(id);
       $("#add-publi").onclick = () => openCarga(ctx, null, { categoria: "publicidad", coleccion_id: id });
     },
@@ -934,6 +1101,7 @@ function vOpcion(id) {
 
 function gastoColeccion(I, g) {
   if (g.coleccion_id) return g.coleccion_id;
+  if (g._multi) return tandaColeccionId(I, I.tanda.get(I.tandasDeGasto.get(g.id)[0]) || {});
   if (g.tanda_id) return tandaColeccionId(I, I.tanda.get(g.tanda_id) || {});
   if (g.campana_id) return I.campana.get(g.campana_id)?.coleccion_id ?? null;
   if (g.producto_id) return I.producto.get(g.producto_id)?.coleccion_id ?? null;
@@ -962,7 +1130,8 @@ function vMovimientos(q) {
   const lista = D.gastos.filter((g) => {
     if (per && !inPeriod(g.fecha, per)) return false;
     if (f.cat && (g.categoria || "sin") !== f.cat) return false;
-    if (f.prod && String(gastoProducto(I, g)) !== f.prod) return false;
+    if (f.prod && String(gastoProducto(I, g)) !== f.prod &&
+      !(I.tandasDeGasto.get(g.id) || []).some((id) => String(I.tanda.get(id)?.producto_id) === f.prod)) return false;
     if (f.col && String(gastoColeccion(I, g)) !== f.col) return false;
     if (f.estado === "sin_asignar" && !faltaAsignar(g)) return false;
     if (f.estado === "estimado" && !g.estimado) return false;
@@ -1272,8 +1441,8 @@ function vSimular() {
         </div>
         ${hayUsd ? `<p class="hint" style="margin:12px 0 0">Los gastos en dólares no se suman a pesos. Quedan fuera del cálculo.</p>` : ""}
       </section>
-      <button class="btn" id="use" ${r.porUnidad == null ? "disabled" : ""}>${icon("check")} Usar como costo de referencia</button>
-      ${cob ? `<p class="hint" style="margin:0 4px">En uso: ${money(cob.porUnidad, "ARS", true)} por unidad (${esc(monthName(cob.mes))}, ${fmtInt(cob.ventas)} ventas). Se suma en el tercer nivel de costo de cada producto.</p>` : ""}`,
+      <button class="btn" id="use" ${r.porUnidad == null ? "disabled" : ""}>${icon("check")} Guardar simulación</button>
+      ${cob ? `<p class="hint" style="margin:0 4px">Guardada: ${money(cob.porUnidad, "ARS", true)} por unidad (${esc(monthName(cob.mes))}, ${fmtInt(cob.ventas)} ventas).</p>` : ""}`,
     bind() {
       bindPeriod(() => SIM.mes, (p) => { SIM.mes = p; render(true); }, "sm");
       $$("[data-it]").forEach((b) => (b.onchange = () => {
@@ -1288,7 +1457,7 @@ function vSimular() {
       $("#use").onclick = (e) => busy(e.currentTarget, async () => {
         await api("ajustes", { method: "PUT", body: { clave: "cobertura", valor: { porUnidad: Math.round(r.porUnidad), mes: SIM.mes, ventas, total: Math.round(r.total), fecha: today() } } });
         await reload();
-        toast("Costo de referencia actualizado");
+        toast("Simulación guardada");
       }).catch(() => {});
     },
   };

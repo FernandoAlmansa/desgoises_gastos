@@ -266,13 +266,52 @@ details.fold .list .row { padding-left: 0; padding-right: 0; min-height: 48px; }
 .level .l-val { font-weight: 650; font-size: 18px; white-space: nowrap; }
 .level.main .l-val { font-size: 20px; }
 
-/* Producto */
-.product-photo { position: relative; width: 100%; aspect-ratio: 4 / 3; border-radius: var(--radius); background: var(--surface-2); overflow: hidden; display: grid; place-items: center; border: 1px solid var(--border); }
-.product-photo img { width: 100%; height: 100%; object-fit: cover; }
-.product-photo .photo-btn { position: absolute; right: 12px; bottom: 12px; }
+/* Producto y colección: foto cuadrada a la mitad del ancho, datos al costado */
+.photo-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: end; }
+.sq-photo { aspect-ratio: 1; border-radius: var(--radius); background: var(--surface-2); overflow: hidden; border: 1px solid var(--border); display: grid; place-items: center; }
+.sq-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sq-empty { display: grid; gap: 6px; justify-items: center; color: var(--muted); }
+.photo-meta { display: grid; gap: 4px; justify-items: start; min-width: 0; }
+.photo-meta .head-value { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; margin-bottom: 8px; }
 .qty-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
-.product-photo.empty-photo { aspect-ratio: auto; height: 112px; justify-items: start; padding-left: 20px; }
-.product-photo.empty-photo .empty { grid-auto-flow: column; gap: 8px; }
+
+/* Balance: subtotales y total con importe total y por unidad */
+.total-row { min-height: 56px; }
+.total-row .row-title { font-weight: 650; white-space: normal; }
+.total-row .row-end b { font-weight: 700; }
+.total-row.subtotal { background: var(--surface-2); }
+.total-row.grand { border-top: 2px solid var(--text); }
+.total-row.grand .row-end b { font-size: 18px; }
+.units-row .row-title { color: var(--muted); }
+.units-row .row-end b { font-size: 17px; }
+.sub-label { margin: 0 4px -8px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+
+/* Resumen: gastos de cada categoría en filas finas */
+.cat-group > .row { padding-bottom: 6px; }
+.mini-list { list-style: none; margin: 0; padding: 0 16px 10px; }
+.mini-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 40px; padding: 8px 0; border-top: 1px dashed var(--border); color: inherit; text-decoration: none; font-size: 14px; }
+.mini-row:active, .mini-row:hover { color: var(--text); background: var(--surface-2); }
+.mini-row .mini-name { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-row .money { flex: none; font-weight: 500; }
+.mini-row.more { color: var(--accent); font-weight: 600; }
+
+/* Colecciones: tarjetas cuadradas con foto de portada */
+.col-grid { display: grid; gap: 16px; }
+.col-tile { position: relative; display: block; aspect-ratio: 1; border-radius: var(--radius); overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); color: #fff; text-decoration: none; transition: opacity .15s ease; }
+.col-tile:active { opacity: .85; }
+.col-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.col-ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+.col-ph svg.i { width: 64px; height: 64px; stroke-width: 1.4; }
+.col-info { position: absolute; left: 0; right: 0; bottom: 0; padding: 48px 20px 18px; display: grid; gap: 4px; background: linear-gradient(to top, rgba(0, 0, 0, .82), rgba(0, 0, 0, .45) 60%, transparent); }
+.col-name { font-size: 26px; font-weight: 700; letter-spacing: -.01em; line-height: 1.15; overflow-wrap: anywhere; }
+.col-sub { font-size: 14px; color: rgba(255, 255, 255, .82); }
+.col-total { font-size: 14px; color: rgba(255, 255, 255, .82); }
+.col-total b { font-size: 20px; font-weight: 650; color: #fff; }
+
+/* Carga: elegir varios productos */
+.row .check { width: 26px; height: 26px; border-radius: 999px; border: 2px solid var(--surface-3); display: grid; place-items: center; flex: none; color: transparent; transition: background-color .15s ease, border-color .15s ease; }
+.row[aria-pressed="true"] .check { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+.row[aria-pressed="true"] { background: var(--surface-2); }
 
 /* ---------- Hojas (carga de gasto, edición) ---------- */
 .sheet-wrap { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; justify-content: flex-end; }
@@ -352,3 +391,4 @@ details.fold .list .row { padding-left: 0; padding-right: 0; min-height: 48px; }
 details.fold > summary .row-title { white-space: normal; }
 .day-head { display: inline-block; } .day-head::first-letter { text-transform: uppercase; }
 .row-sub.wrap, .row-title.wrap { white-space: normal; }
+.cat-group > .row .row-title { white-space: normal; }

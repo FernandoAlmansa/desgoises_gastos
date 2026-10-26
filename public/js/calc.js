@@ -52,6 +52,8 @@ export function index(D) {
     muestrasDeProducto: group(D.muestras, "producto_id"),
     noAplica: new Set(D.tandaConceptos.filter((c) => c.estado === "no_aplica").map((c) => `${c.tanda_id}|${c.concepto}`)),
     tandasDeCampana: new Map(), campanasDeTanda: new Map(),
+    tandasDeGasto: new Map(), gastosDeTandaMulti: new Map(),
+    packagingDeProducto: group(D.productoPackaging || [], "producto_id"),
   };
   for (const ct of D.campanaTandas) {
     if (!I.tandasDeCampana.has(ct.campana_id)) I.tandasDeCampana.set(ct.campana_id, []);
@@ -59,8 +61,17 @@ export function index(D) {
     if (!I.campanasDeTanda.has(ct.tanda_id)) I.campanasDeTanda.set(ct.tanda_id, []);
     I.campanasDeTanda.get(ct.tanda_id).push(ct.campana_id);
   }
+  // Publicidad cargada a varios productos: el gasto queda sin tanda propia y se reparte entre las suyas.
+  for (const gt of D.gastoTandas || []) {
+    if (!I.tandasDeGasto.has(gt.gasto_id)) I.tandasDeGasto.set(gt.gasto_id, []);
+    I.tandasDeGasto.get(gt.gasto_id).push(gt.tanda_id);
+    if (!I.gastosDeTandaMulti.has(gt.tanda_id)) I.gastosDeTandaMulti.set(gt.tanda_id, []);
+    I.gastosDeTandaMulti.get(gt.tanda_id).push(gt.gasto_id);
+  }
+  for (const id of I.tandasDeGasto.keys()) { const g = I.gasto.get(id); if (g) g._multi = true; }
   I.campaignCache = new Map();
   I.publiColCache = new Map();
+  I.publiMultiCache = new Map();
   return I;
 }
 
@@ -130,6 +141,26 @@ export function publiColeccionInfo(I, coleccionId) {
   return info;
 }
 
+// Publicidad cargada a varios productos elegidos: se reparte entre las unidades de esas tandas.
+export function publiMultiInfo(I, gastoId) {
+  if (I.publiMultiCache.has(gastoId)) return I.publiMultiCache.get(gastoId);
+  const g = I.gasto.get(gastoId);
+  const tandas = (I.tandasDeGasto.get(gastoId) || []).map((id) => I.tanda.get(id));
+  const info = { id: gastoId, gasto: g, ...repartir(M.of(g.moneda, g.monto), tandas, [g]) };
+  I.publiMultiCache.set(gastoId, info);
+  return info;
+}
+
+// Packaging vinculado al producto: precio por unidad de la compra × cuántos lleva cada prenda × unidades.
+export function packagingInfo(I, productoId, n) {
+  return (I.packagingDeProducto.get(productoId) || []).map((link) => {
+    const g = I.gasto.get(link.gasto_id);
+    const unit = g?.cantidad ? g.monto / g.cantidad : null;
+    const monto = unit != null && n ? M.of(g.moneda, Math.round(unit * link.por_prenda * n)) : null;
+    return { link, gasto: g, opcion: g ? I.opcion.get(g.opcion_id) : null, unit, monto };
+  }).filter((x) => x.gasto);
+}
+
 // Reparte un total entre tandas según sus unidades (finales o, si no hay, estimadas).
 function repartir(total, tandas, gastos) {
   const parts = tandas.filter(Boolean).map((t) => ({ tanda: t, ...unidades(t) }));
@@ -172,14 +203,25 @@ export function tandaCosts(I, tandaId) {
   const pc = colId != null ? publiColeccionInfo(I, colId) : null;
   const publiCol = pc && !M.isZero(pc.total) ? { coleccion: I.coleccion.get(colId), info: pc, monto: pc.asignado.get(tandaId) || null } : null;
 
+  const publiMulti = (I.gastosDeTandaMulti.get(tandaId) || []).map((gid) => {
+    const info = publiMultiInfo(I, gid);
+    return { gasto: info.gasto, info, monto: info.asignado.get(tandaId) || null };
+  });
+  const pack = packagingInfo(I, t.producto_id, u.n);
+
   const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
   const lineas = {
     produccion: { total: tot(prod), gastos: prod },
     desarrollo: { total: tot(desa), gastos: desa, aplica: esPrimera },
+    packaging: { total: M.sum(pack.map((x) => x.monto || {})), items: pack },
     campana: { total: M.sum(campanas.map((c) => c.monto || {})), campanas },
-    publicidad: { total: M.add(tot(publi), publiCol?.monto || {}), gastos: publi, coleccion: publiCol },
+    publicidad: {
+      total: M.sum([tot(publi), publiCol?.monto || {}, ...publiMulti.map((x) => x.monto || {})]),
+      gastos: publi, coleccion: publiCol, multi: publiMulti,
+    },
   };
-  const directo = M.sum([lineas.produccion.total, lineas.desarrollo.total, lineas.campana.total, lineas.publicidad.total]);
+  const fabricacion = M.sum([lineas.produccion.total, lineas.desarrollo.total, lineas.packaging.total]);
+  const directo = M.sum([fabricacion, lineas.campana.total, lineas.publicidad.total]);
 
   // Conceptos de producción que todavía no tienen gasto ni están marcados "no aplica".
   const conceptos = I.D.opciones.filter((o) => o.tipo === "concepto_prod" && !o.archivada).map((o) => o.nombre);
@@ -195,17 +237,24 @@ export function tandaCosts(I, tandaId) {
     const n = publiCol.info.faltan.length;
     avisos.push(`Reparto de la publicidad de ${publiCol.coleccion?.nombre} pendiente: falta cantidad en ${n} producto${n > 1 ? "s" : ""}`);
   }
+  for (const x of publiMulti) {
+    if (x.info.estado === "falta_cantidad" && u.n != null) avisos.push(`Reparto de la publicidad “${x.gasto.descripcion || "sin descripción"}” pendiente: falta cantidad en otro producto`);
+  }
+  for (const x of pack) {
+    if (x.unit == null) avisos.push(`Packaging ${x.opcion?.nombre || ""}: la compra no tiene la cantidad de unidades`);
+  }
   const hayEstimados = u.estimada || [...prod, ...desa, ...publi].some((g) => g.estimado) || campanas.some((c) => c.info.estado === "estimado") ||
-    publiCol?.info.estado === "estimado";
+    publiCol?.info.estado === "estimado" || publiMulti.some((x) => x.info.estado === "estimado");
 
   let estado;
   if (t.cerrada) estado = "cerrado";
-  else if (u.n == null || campanas.some((c) => c.info.estado === "falta_cantidad") || publiCol?.info.estado === "falta_cantidad") estado = "incompleto";
+  else if (u.n == null || campanas.some((c) => c.info.estado === "falta_cantidad") || publiCol?.info.estado === "falta_cantidad" ||
+    publiMulti.some((x) => x.info.estado === "falta_cantidad")) estado = "incompleto";
   else if (hayEstimados) estado = "estimado";
   else estado = "al_dia";
 
   return {
-    tanda: t, unidades: u, esPrimera, lineas, directo, estado, avisos, conceptosPendientes,
+    tanda: t, unidades: u, esPrimera, lineas, fabricacion, directo, estado, avisos, conceptosPendientes,
     tela: telaInfo(prod, u.n),
     porUnidad: (m) => (u.n ? M.scale(m, 1 / u.n) : null),
   };
@@ -265,7 +314,8 @@ export function coleccionCosts(I, coleccionId) {
 
   const prod = take(I.D.gastos.filter((g) => g.categoria === "produccion" && tandaSet.has(g.tanda_id)));
   const publi = take(I.D.gastos.filter((g) => g.categoria === "publicidad" &&
-    (tandaSet.has(g.tanda_id) || (!g.tanda_id && g.coleccion_id === coleccionId))));
+    (tandaSet.has(g.tanda_id) || (!g.tanda_id && g.coleccion_id === coleccionId) ||
+      (I.tandasDeGasto.get(g.id) || []).some((id) => tandaSet.has(id)))));
   const productos = [...new Set(tandas.map((t) => t.producto_id))];
   const desa = take(productos.filter((pid) => tandaSet.has(primeraTanda(I, pid)?.id)).flatMap((pid) => gastosDesarrollo(I, pid)));
   const campanas = I.D.campanas.filter((c) => c.coleccion_id === coleccionId);
@@ -297,7 +347,7 @@ export function faltaAsignar(g) {
   if (!c) return true;
   if (c.destino === "muestra") return !g.muestra_id;
   if (c.destino === "campana") return !g.campana_id;
-  if (c.coleccion && g.coleccion_id) return false;
+  if (c.coleccion && (g.coleccion_id || g._multi)) return false;
   if (c.destino === "producto") return c.tanda ? !g.tanda_id : !g.producto_id;
   return false;
 }
@@ -418,6 +468,8 @@ export function destinoTexto(I, g) {
   if (g.campana_id) return I.campana.get(g.campana_id)?.nombre;
   if (g.opcion_id) return I.opcion.get(g.opcion_id)?.nombre;
   if (g.coleccion_id) { const c = I.coleccion.get(g.coleccion_id); return c ? `Colección ${c.nombre}` : null; }
+  const multi = I.tandasDeGasto.get(g.id);
+  if (multi) return multi.map((id) => I.producto.get(I.tanda.get(id)?.producto_id)?.nombre).filter(Boolean).join(", ");
   return null;
 }
 

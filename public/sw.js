@@ -1,5 +1,5 @@
 // Guarda la app para que abra rápido. Los datos siempre se piden al servidor.
-const CACHE = "dg-v2";
+const CACHE = "dg-v3";
 const SHELL = ["/", "/app.css", "/js/app.js", "/js/calc.js", "/js/ui.js", "/js/carga.js", "/img/logo.png", "/img/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

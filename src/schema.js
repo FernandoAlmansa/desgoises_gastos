@@ -1,7 +1,7 @@
 // Estructura de la base. Se aplica sola la primera vez que el Worker recibe un pedido.
 // Si más adelante cambia, subir SCHEMA_VERSION y agregar las sentencias nuevas al final de MIGRATIONS.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const MIGRATIONS = {
   1: [
@@ -125,6 +125,24 @@ export const MIGRATIONS = {
     `ALTER TABLE gastos ADD COLUMN kg REAL`,
     `ALTER TABLE gastos ADD COLUMN coleccion_id INTEGER REFERENCES colecciones(id)`,
     ...seed("concepto_muestra", ["Tela", "Molde", "Corte", "Confección", "Cadete"]),
+  ],
+  3: [
+    // Foto de portada de cada colección.
+    `ALTER TABLE colecciones ADD COLUMN foto_id INTEGER`,
+    // Publicidad cargada a varios productos a la vez: se reparte por unidades entre esas tandas.
+    `CREATE TABLE IF NOT EXISTS gasto_tandas (
+      gasto_id INTEGER NOT NULL REFERENCES gastos(id),
+      tanda_id INTEGER NOT NULL REFERENCES tandas(id),
+      PRIMARY KEY (gasto_id, tanda_id)
+    )`,
+    // Packaging que lleva cada prenda: apunta a la compra (gasto) de donde sale el precio por unidad.
+    `CREATE TABLE IF NOT EXISTS producto_packaging (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      producto_id INTEGER NOT NULL REFERENCES productos(id),
+      gasto_id INTEGER NOT NULL REFERENCES gastos(id),
+      por_prenda REAL NOT NULL DEFAULT 1,
+      creado TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
   ],
 };
 

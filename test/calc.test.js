@@ -176,3 +176,28 @@ test("rendimiento de tela: kilos comprados contra unidades", () => {
   assert.equal(tela.telas.length, 2);
   assert.equal(M.get(tela.telas.find((t) => t.nombre === "Rib").porKg), $(10000));
 });
+
+test("Publicidad a varios productos: se reparte por unidades solo entre los elegidos", () => {
+  const D = base();
+  D.gastos.push({ id: 20, fecha: "2026-10-10", monto: $(60000), moneda: "ARS", categoria: "publicidad", descripcion: "Instagram" });
+  D.gastoTandas = [{ gasto_id: 20, tanda_id: 1 }, { gasto_id: 20, tanda_id: 2 }];
+  const I = index(D);
+  // 20 u. y 40 u. → 20.000 y 40.000; el tercer producto no recibe nada.
+  assert.equal(M.get(tandaCosts(I, 1).lineas.publicidad.total), $(20000));
+  assert.equal(M.get(tandaCosts(I, 2).lineas.publicidad.total), $(40000));
+  assert.equal(M.get(tandaCosts(I, 3).lineas.publicidad.total), 0);
+  assert.equal(faltaAsignar(I.gasto.get(20)), false);
+  // En la colección se cuenta una sola vez.
+  assert.equal(coleccionCosts(I, 1).lineas.publicidad.gastos.filter((g) => g.id === 20).length, 1);
+});
+
+test("Packaging vinculado: precio por unidad de la compra × por prenda × unidades, dentro de fabricación", () => {
+  const D = base();
+  // Etiquetas: $150.000 / 5.000 u. = $30 c/u; el crewneck (40 u.) lleva 2 por prenda → $2.400.
+  D.productoPackaging = [{ id: 1, producto_id: 2, gasto_id: 7, por_prenda: 2 }];
+  const I = index(D);
+  const tc = tandaCosts(I, 2);
+  assert.equal(M.get(tc.lineas.packaging.total), $(2400));
+  assert.equal(M.get(tc.fabricacion), $(800000) + $(2400));
+  assert.equal(M.get(tc.directo), M.get(tc.fabricacion) + M.get(tc.lineas.campana.total) + M.get(tc.lineas.publicidad.total));
+});

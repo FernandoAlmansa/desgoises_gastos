@@ -136,12 +136,13 @@ Verifica los cálculos con los casos de la especificación (reparto de campaña,
 - **Cantidades:** se usa la cantidad final si está; si no, la estimada (marcado como *estimado*). Sin cantidad no se calcula costo por unidad: dice “Falta cargar cantidad”.
 - **Campañas:** gasto asignado a cada producto = gasto de la campaña × unidades del producto ÷ unidades totales participantes. Las partes siempre suman el total exacto. En la colección, la campaña se cuenta una sola vez.
 - **Desarrollo (muestras vinculadas y moldería):** se cuenta una sola vez, en la **primera tanda** del producto. Los restocks muestran “En Primera producción”.
-- **Publicidad:** se carga a un producto o a una **colección entera**. La de colección se reparte igual que una campaña: gasto × unidades del producto ÷ unidades de todos los productos de la colección.
+- **Publicidad:** se carga a **uno o varios productos** o a una **colección entera**. Con varios productos o con la colección se reparte igual que una campaña: gasto × unidades del producto ÷ unidades de todos los productos elegidos (o de la colección).
 - **Conceptos de producción** (tela, corte, confección, estampa, lavadero, avíos): los que no tienen gasto figuran **pendientes**, no $0, hasta que se cargan o se marcan “No aplica”. Las **muestras** tienen sus propios conceptos (tela, molde, corte, confección, cadete).
-- **Rendimiento de tela:** al cargar un gasto con concepto Tela se anotan los **kg**. En la ficha del producto: unidades por kg = unidades ÷ kg de tela de la tanda, y el consumo por prenda (kg ÷ unidades), en total y por cada tela.
-- **Gastos generales** (suscripciones, envíos, equipamiento, comisiones, administración, packaging): no se reparten entre productos. Equipamiento se muestra aparte.
+- **Rendimiento de tela:** al cargar un gasto con concepto Tela se anotan los **kg**. En la ficha del producto: unidades por kg = unidades ÷ kg de tela de la tanda, y el consumo por prenda (kg ÷ unidades), en total y por cada tela (separada por el nombre de la descripción), con el porcentaje que representa del total de tela.
+- **Gastos generales** (suscripciones, envíos, equipamiento, comisiones, administración, packaging): no se reparten entre productos. En el Resumen, equipamiento y packaging se muestran aparte.
+- **Packaging de cada prenda:** desde la ficha del producto se vincula una compra de packaging (bolsa, sticker…). Precio por unidad = lo que se pagó ÷ unidades compradas; al producto se le suma precio × cuántas lleva cada prenda × unidades. Entra en el **Total de fabricación y desarrollo**. La compra sigue contándose una sola vez en el Resumen.
 - **Suscripciones:** se guarda el pago y el período que cubre. En la simulación, un pago anual se reparte en 12 meses.
-- **Simular cobertura de gastos generales** (Gestionar): elegís los gastos de un mes y las ventas esperadas, y te dice cuánto debería cubrir cada venta. No modifica ningún gasto. Ese valor se suma como tercer nivel de costo en cada producto.
+- **Simular cobertura de gastos generales** (Gestionar): elegís los gastos de un mes y las ventas esperadas, y te dice cuánto debería cubrir cada venta. No modifica ningún gasto.
 - **Monedas:** pesos y dólares nunca se suman entre sí; se muestran por separado.
 - **Tanda cerrada:** al marcarla “revisada y cerrada” avisa si falta algo; después no se puede modificar hasta reabrirla. Los cambios de cantidades y gastos quedan en el historial de la tanda.
 

@@ -46,9 +46,11 @@ export function openCarga(ctx, gasto = null, preset = {}) {
 
   const I = () => ctx.I();
   const cat = () => CAT[st.categoria];
+  // Publicidad repartida entre varios productos: se guardan las tandas elegidas aparte.
+  if (editing) st.multi = I().tandasDeGasto.get(gasto.id)?.slice() || null;
 
   function clearDestino() {
-    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg"]) st[k] = null;
+    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg", "multi", "sel"]) st[k] = null;
   }
 
   function crumbs() {
@@ -66,6 +68,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   }
   function destinoNombre() {
     const i = I();
+    if (st.multi?.length) return `${st.multi.length} productos`;
     if (st.muestra_id) return i.muestra.get(st.muestra_id)?.nombre;
     if (st.producto_id) return i.producto.get(st.producto_id)?.nombre;
     if (st.campana_id) return i.campana.get(st.campana_id)?.nombre;
@@ -155,11 +158,17 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const items = listItems();
     const needsCol = c.destino === "producto" || c.destino === "campana";
     const cols = c.coleccion ? coleccionItems() : [];
+    // Con colección (publicidad) se pueden elegir uno o varios productos.
+    const multi = !!c.coleccion;
+    if (multi && !st.sel) {
+      const i = I();
+      st.sel = new Set(st.multi?.length ? st.multi.map((id) => i.tanda.get(id)?.producto_id).filter(Boolean) : st.producto_id ? [st.producto_id] : []);
+    }
     body.innerHTML = `
       ${crumbs()}
-      <h3 class="h" style="margin:0;font-size:20px">${c.coleccion ? "¿Qué producto o colección?" : txt.titulo}</h3>
+      <h3 class="h" style="margin:0;font-size:20px">${multi ? "¿Qué producto/s o colección?" : txt.titulo}</h3>
       ${items.length + cols.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
-      ${c.coleccion ? `<div class="hero-label" style="margin-bottom:-8px">Un producto</div>` : ""}
+      ${multi ? `<div class="hero-label" style="margin-bottom:-8px">Uno o varios productos</div>` : ""}
       <div class="card flush">
         <ul class="list" id="d-list">
           <li><button type="button" class="row add" id="d-add"><span class="ico-box">${icon("plus")}</span><span class="row-main">${txt.nuevo}</span></button></li>
@@ -168,10 +177,10 @@ export function openCarga(ctx, gasto = null, preset = {}) {
             ${needsCol ? coleccionPicker() : ""}
             <div class="btn-row"><button type="button" class="btn secondary sm" id="d-cancel">Cancelar</button><button class="btn sm" id="d-save">Guardar y seguir</button></div>
           </form></li>
-          ${items.map((it) => `<li data-name="${esc(it.nombre.toLowerCase())}"><button type="button" class="row" data-pick="${it.id}">
+          ${items.map((it) => `<li data-name="${esc(it.nombre.toLowerCase())}"><button type="button" class="row" ${multi ? `data-toggle="${it.id}" aria-pressed="${st.sel.has(it.id)}"` : `data-pick="${it.id}"`}>
             ${it.foto ? `<span class="thumb"><img src="${fileUrl(it.foto, true)}" alt="" loading="lazy"></span>` : `<span class="ico-box">${icon(it.icon)}</span>`}
             <span class="row-main"><span class="row-title">${esc(it.nombre)}</span>${it.sub ? `<span class="row-sub">${esc(it.sub)}</span>` : ""}</span>
-            ${icon("right", "chev")}</button></li>`).join("")}
+            ${multi ? `<span class="check" aria-hidden="true">${icon("check", "sm")}</span>` : icon("right", "chev")}</button></li>`).join("")}
         </ul>
       </div>
       ${!items.length ? `<p class="hint" style="margin:0">Todavía no hay nada cargado acá. Creá el primero arriba: queda guardado para las próximas cargas.</p>` : ""}
@@ -186,7 +195,34 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         <p class="hint" style="margin:0">El gasto se reparte entre todas las unidades de los productos de la colección.</p>`
         : `<p class="hint" style="margin:0">Todavía no hay colecciones. Se crean desde la pestaña Colecciones.</p>`}
       </div>` : ""}`;
-    foot.parentElement.hidden = true;
+    foot.parentElement.hidden = !multi;
+    const seguir = () => {
+      const n = st.sel.size;
+      foot.innerHTML = `<button class="btn block" id="d-next" ${n ? "" : "disabled"}>${n > 1 ? `Seguir con ${n} productos` : n ? "Seguir con 1 producto" : "Elegí uno o varios productos"}</button>
+        ${n > 1 ? `<p class="hint" style="margin:8px 0 0;text-align:center">Se reparte entre ellos según las unidades de cada uno.</p>` : ""}`;
+      $("#d-next", foot).onclick = () => {
+        const ids = [...st.sel];
+        if (ids.length === 1) return pick(ids[0]);
+        const i = I();
+        clearDestino();
+        // De cada producto se usa la tanda abierta más reciente (o la última, si están todas cerradas).
+        st.multi = ids.map((pid) => {
+          const ts = (i.tandasDeProducto.get(pid) || []).slice().sort((a, b) => b.id - a.id);
+          return (ts.find((t) => !t.cerrada) || ts[0])?.id;
+        }).filter(Boolean);
+        st.sel = new Set(ids);
+        go("detalle");
+      };
+    };
+    if (multi) {
+      seguir();
+      $$("[data-toggle]", body).forEach((b) => (b.onclick = () => {
+        const id = Number(b.dataset.toggle);
+        st.sel.has(id) ? st.sel.delete(id) : st.sel.add(id);
+        b.setAttribute("aria-pressed", String(st.sel.has(id)));
+        seguir();
+      }));
+    }
 
     const q = $("#d-q", body);
     if (q) q.oninput = () => {
@@ -215,6 +251,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         else row = await api("opciones", { method: "POST", body: { tipo: c.opcionTipo, nombre, orden: 50 } });
         await ctx.reload();
         toast(`“${nombre}” creado y guardado para la próxima`);
+        if (multi) { st.sel.add(row.id); render(); return; }
         pick(row.id);
       });
     };
@@ -483,6 +520,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       saved = editing
         ? await api(`gastos/${gasto.id}`, { method: "PATCH", body: payload })
         : await api("gastos", { method: "POST", body: payload });
+      if (st.multi?.length || gasto?._multi) await api(`gastos/${saved.id}/tandas`, { method: "PUT", body: { tanda_ids: st.multi || [] } });
       try { if (st.medio_pago) localStorage.setItem(LAST_MEDIO, st.medio_pago); } catch {}
       await ctx.reload();
     }).catch(() => null);
