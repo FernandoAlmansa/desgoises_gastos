@@ -1,8 +1,8 @@
 // Carga y edición de un gasto: Monto → categoría → selección → detalle → guardar.
-import { CATEGORIAS, CAT, pagoInfo, tandaLabel } from "./calc.js";
+import { CATEGORIAS, CAT, pagoInfo, tandaLabel, tandaColeccionId, unidades, esTela } from "./calc.js";
 import {
   icon, esc, $, $$, money, parseAmount, liveFormat, centsToInput, today, fmtDate, api, toast, sheet, busy,
-  uploadFile, fileUrl, plural, promptSheet,
+  uploadFile, fileUrl, plural, promptSheet, parseKg, fmtKg, fmtInt,
 } from "./ui.js";
 
 const LAST_MEDIO = "dg_ultimo_medio";
@@ -48,7 +48,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   const cat = () => CAT[st.categoria];
 
   function clearDestino() {
-    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "concepto", "cantidad"]) st[k] = null;
+    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg"]) st[k] = null;
   }
 
   function crumbs() {
@@ -70,6 +70,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     if (st.producto_id) return i.producto.get(st.producto_id)?.nombre;
     if (st.campana_id) return i.campana.get(st.campana_id)?.nombre;
     if (st.opcion_id) return i.opcion.get(st.opcion_id)?.nombre;
+    if (st.coleccion_id) { const c = i.coleccion.get(st.coleccion_id); return c ? `Colección ${c.nombre}` : null; }
     return null;
   }
 
@@ -153,10 +154,12 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const txt = DESTINO_TXT[c.destino === "opcion" ? c.opcionTipo : c.destino];
     const items = listItems();
     const needsCol = c.destino === "producto" || c.destino === "campana";
+    const cols = c.coleccion ? coleccionItems() : [];
     body.innerHTML = `
       ${crumbs()}
-      <h3 class="h" style="margin:0;font-size:20px">${txt.titulo}</h3>
-      ${items.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
+      <h3 class="h" style="margin:0;font-size:20px">${c.coleccion ? "¿Qué producto o colección?" : txt.titulo}</h3>
+      ${items.length + cols.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
+      ${c.coleccion ? `<div class="hero-label" style="margin-bottom:-8px">Un producto</div>` : ""}
       <div class="card flush">
         <ul class="list" id="d-list">
           <li><button type="button" class="row add" id="d-add"><span class="ico-box">${icon("plus")}</span><span class="row-main">${txt.nuevo}</span></button></li>
@@ -171,14 +174,30 @@ export function openCarga(ctx, gasto = null, preset = {}) {
             ${icon("right", "chev")}</button></li>`).join("")}
         </ul>
       </div>
-      ${!items.length ? `<p class="hint" style="margin:0">Todavía no hay nada cargado acá. Creá el primero arriba: queda guardado para las próximas cargas.</p>` : ""}`;
+      ${!items.length ? `<p class="hint" style="margin:0">Todavía no hay nada cargado acá. Creá el primero arriba: queda guardado para las próximas cargas.</p>` : ""}
+      ${c.coleccion ? `<div class="stack-sm">
+        <div class="hero-label">O una colección entera</div>
+        ${cols.length ? `<div class="card flush"><ul class="list">
+          ${cols.map((it) => `<li data-name="${esc(it.nombre.toLowerCase())}"><button type="button" class="row" data-pickcol="${it.id}">
+            <span class="ico-box">${icon("layers")}</span>
+            <span class="row-main"><span class="row-title">${esc(it.nombre)}</span><span class="row-sub">${esc(it.sub)}</span></span>
+            ${icon("right", "chev")}</button></li>`).join("")}
+        </ul></div>
+        <p class="hint" style="margin:0">El gasto se reparte entre todas las unidades de los productos de la colección.</p>`
+        : `<p class="hint" style="margin:0">Todavía no hay colecciones. Se crean desde la pestaña Colecciones.</p>`}
+      </div>` : ""}`;
     foot.parentElement.hidden = true;
 
     const q = $("#d-q", body);
     if (q) q.oninput = () => {
       const v = q.value.trim().toLowerCase();
-      $$("#d-list > li[data-name]", body).forEach((li) => (li.hidden = v && !li.dataset.name.includes(v)));
+      $$("li[data-name]", body).forEach((li) => (li.hidden = v && !li.dataset.name.includes(v)));
     };
+    $$("[data-pickcol]", body).forEach((b) => (b.onclick = () => {
+      clearDestino();
+      st.coleccion_id = Number(b.dataset.pickcol);
+      go("detalle");
+    }));
     const form = $("#d-new form", body);
     $("#d-add", body).onclick = () => { $("#d-new", body).hidden = false; $("#d-add", body).parentElement.hidden = true; $("#d-name", body).value = q?.value || ""; $("#d-name", body).focus(); };
     $("#d-cancel", body).onclick = () => { $("#d-new", body).hidden = true; $("#d-add", body).parentElement.hidden = false; };
@@ -200,6 +219,16 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       });
     };
     $$("[data-pick]", body).forEach((b) => (b.onclick = () => pick(Number(b.dataset.pick))));
+  }
+
+  function coleccionItems() {
+    const i = I();
+    return i.D.colecciones.filter((x) => !x.archivada).map((x) => {
+      const ts = i.D.tandas.filter((t) => tandaColeccionId(i, t) === x.id);
+      const prods = new Set(ts.map((t) => t.producto_id)).size;
+      const u = ts.reduce((s, t) => s + (unidades(t).n || 0), 0);
+      return { id: x.id, nombre: x.nombre, sub: prods ? `${plural(prods, "producto")}${u ? ` · ${fmtInt(u)} u.` : ""}` : "Sin productos todavía" };
+    });
   }
 
   function coleccionPicker() {
@@ -290,7 +319,10 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         <div class="chips" id="f-conc">
           ${conceptos.map((o) => `<button type="button" class="chip" data-conc="${esc(o.nombre)}" aria-pressed="${st.concepto === o.nombre}">${esc(o.nombre)}</button>`).join("")}
           <button type="button" class="chip add" id="f-conc-add">${icon("plus", "sm")} Agregar otro</button>
-        </div></div>` : ""}
+        </div></div>
+      <div class="field" id="f-kg-wrap" ${esTela(st.concepto) ? "" : "hidden"}><label for="f-kg">Cantidad de tela (kg)</label>
+        <input id="f-kg" class="input" inputmode="decimal" placeholder="Ej.: 12,5" value="${st.kg ? esc(fmtKg(st.kg, 3)) : ""}" autocomplete="off">
+        <span class="hint" id="f-kg-hint">Con los kilos y las unidades que salgan se calcula el rendimiento de la tela.</span></div>` : ""}
       ${st.categoria === "packaging" ? `<div class="field"><label for="f-cant">Cantidad de unidades compradas</label>
         <input id="f-cant" class="input" inputmode="numeric" placeholder="Ej.: 5.000" value="${st.cantidad ? esc(st.cantidad.toLocaleString("es-AR")) : ""}">
         <span class="hint" id="f-unit"></span></div>` : ""}
@@ -330,12 +362,24 @@ export function openCarga(ctx, gasto = null, preset = {}) {
 
     foot.innerHTML = `<button class="btn block" id="f-save" ${editing && tanda?.cerrada ? "disabled" : ""}>${icon("check")} ${editing ? "Guardar cambios" : "Guardar gasto"}</button>`;
 
-    const bindChips = (sel, key, attr, conv = (x) => x) => $$(sel, body).forEach((b) => (b.onclick = () => {
+    const bindChips = (sel, key, attr, conv = (x) => x, after) => $$(sel, body).forEach((b) => (b.onclick = () => {
       const v = conv(b.dataset[attr]);
       st[key] = st[key] === v && key === "concepto" ? null : v;
       $$(sel, body).forEach((x) => x.setAttribute("aria-pressed", String(conv(x.dataset[attr]) === st[key])));
+      after?.();
     }));
-    bindChips("[data-conc]", "concepto", "conc");
+    bindChips("[data-conc]", "concepto", "conc", undefined, () => {
+      const wrap = $("#f-kg-wrap", body);
+      if (wrap) wrap.hidden = !esTela(st.concepto);
+    });
+    const kg = $("#f-kg", body);
+    const showKg = () => {
+      const n = parseKg(kg.value);
+      $("#f-kg-hint", body).textContent = n
+        ? `Precio por kg: ${money(st.monto / n, st.moneda, true)}`
+        : "Con los kilos y las unidades que salgan se calcula el rendimiento de la tela.";
+    };
+    if (kg) { kg.oninput = showKg; if (kg.value) showKg(); }
     bindChips("[data-medio]", "medio_pago", "medio");
     bindChips("[data-cubre]", "cubre_meses", "cubre", Number);
 
@@ -408,6 +452,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     if ($("#f-fecha", body)) st.fecha = v("#f-fecha") || today();
     if ($("#f-prov", body)) st.proveedor = v("#f-prov").trim();
     if ($("#f-cant", body)) st.cantidad = Number(v("#f-cant").replace(/\D/g, "")) || null;
+    if ($("#f-kg", body)) st.kg = parseKg(v("#f-kg"));
     if ($("#f-est", body)) st.estimado = $("#f-est", body).checked ? 1 : 0;
     if ($("#f-encant", body)) st.en_cantidad = $("#f-encant", body).checked ? 1 : 0;
     if ($("#f-parcial", body)) st.pagoParcial = parseAmount(v("#f-parcial"));
@@ -424,7 +469,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const payload = {
       fecha: st.fecha, monto: st.monto, moneda: st.moneda, categoria: st.categoria,
       muestra_id: st.muestra_id, producto_id: st.producto_id, tanda_id: st.tanda_id, campana_id: st.campana_id, opcion_id: st.opcion_id,
-      concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
+      coleccion_id: st.coleccion_id, kg: esTela(st.concepto) ? st.kg : null, concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
       comprobante_id: st.comprobante_id, cantidad: st.categoria === "packaging" ? st.cantidad : null,
       cubre_meses: st.categoria === "suscripciones" ? st.cubre_meses || 1 : null, estimado: st.estimado, en_cantidad: st.en_cantidad,
     };

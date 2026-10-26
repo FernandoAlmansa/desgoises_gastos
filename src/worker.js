@@ -22,7 +22,7 @@ const TABLES = {
   gastos: [
     "fecha", "monto", "moneda", "categoria", "muestra_id", "producto_id", "tanda_id", "campana_id",
     "opcion_id", "concepto", "descripcion", "medio_pago", "proveedor", "comprobante_id", "cantidad",
-    "cubre_meses", "estimado", "en_cantidad",
+    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id",
   ],
   pagos: ["gasto_id", "fecha", "monto", "medio_pago"],
 };
@@ -33,6 +33,7 @@ const REQUIRED = {
 // Qué tablas no se pueden borrar si un gasto las usa.
 const REFERENCED_BY_GASTOS = {
   muestras: "muestra_id", productos: "producto_id", tandas: "tanda_id", campanas: "campana_id", opciones: "opcion_id",
+  colecciones: "coleccion_id",
 };
 
 let schemaReady = false;
@@ -184,6 +185,10 @@ function clean(table, body, partial) {
     if (v !== null && (col.endsWith("_id") || ["monto", "cantidad", "cubre_meses", "cant_estimada", "cant_final", "orden"].includes(col))) {
       v = Math.round(Number(v));
       if (!Number.isFinite(v)) throw new HttpError(400, `Valor inválido en ${col}`);
+    }
+    if (v !== null && col === "kg") {
+      v = Math.round(Number(v) * 1000) / 1000;
+      if (!Number.isFinite(v) || v < 0) throw new HttpError(400, "Kilos inválidos");
     }
     if (["estimado", "en_cantidad", "cerrada", "archivada", "archivado"].includes(col)) v = v ? 1 : 0;
     if (typeof v === "string") v = v.trim().slice(0, 500);

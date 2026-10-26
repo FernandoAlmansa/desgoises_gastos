@@ -2,11 +2,11 @@
 import {
   CATEGORIAS, CAT, M, index, pagoInfo, unidades, tandaCosts, productoResumen, coleccionCosts, campaignInfo,
   avisos, faltaAsignar, tandaLabel, destinoTexto, gastoTitulo, tandaColeccionId, generalesDelMes, simularCobertura,
-  addMonths, monthKey, gastosDesarrollo,
+  addMonths, monthKey, gastosDesarrollo, publiColeccionInfo, esTela,
 } from "./calc.js";
 import {
   icon, $, $$, esc, money, moneyM, fmtInt, parseAmount, liveFormat, centsToInput, today, thisMonth, monthName, fmtDate,
-  fmtDateLong, plural, api, AuthError, toast, sheet, confirmSheet, promptSheet, busy, uploadFile, fileUrl,
+  fmtDateLong, plural, api, AuthError, toast, sheet, confirmSheet, promptSheet, busy, uploadFile, fileUrl, fmtKg,
 } from "./ui.js";
 import { openCarga } from "./carga.js";
 
@@ -141,14 +141,18 @@ function thumb(p, size = "") {
     : `<span class="thumb ${size}">${icon("shirt")}</span>`;
 }
 
+// Arriba lo que se anotó (descripción); abajo el concepto y a qué producto, colección o muestra va.
 function gastoRow(g, { showCat = true } = {}) {
   const I = S.I;
   const p = pagoInfo(I, g);
   const c = CAT[g.categoria];
-  const sub = [showCat && (c?.corto || c?.nombre || "Sin categoría"), g.descripcion && g.descripcion !== gastoTitulo(I, g) ? g.descripcion : null, fmtDate(g.fecha)]
-    .filter(Boolean).join(" · ");
+  const catTxt = showCat && (c?.corto || c?.nombre || "Sin categoría");
+  const desc = (g.descripcion || "").trim();
+  const title = desc || gastoTitulo(I, g);
+  const sub = (desc ? [g.concepto || catTxt, destinoTexto(I, g)] : [catTxt])
+    .concat(g.kg ? `${fmtKg(g.kg)} kg` : null, fmtDate(g.fecha)).filter(Boolean).join(" · ");
   return `<li><a class="row" href="#/gasto/${g.id}">
-    <span class="row-main"><span class="row-title">${esc(gastoTitulo(I, g))}</span><span class="row-sub">${esc(sub)}</span></span>
+    <span class="row-main"><span class="row-title wrap">${esc(title)}</span><span class="row-sub wrap">${esc(sub)}</span></span>
     <span class="row-end"><b class="money">${money(g.monto, g.moneda)}</b>${faltaAsignar(g) ? '<span class="badge warn">Sin asignar</span>' : PAGO_BADGE[p.estado]}${g.estimado ? '<span class="badge info">Estimado</span>' : ""}</span>
   </a></li>`;
 }
@@ -411,22 +415,30 @@ function vProducto(id, q) {
               <span class="row-end"><b class="money">${c.monto ? moneyM(c.monto) : "Pendiente"}</b>${c.info.estado === "estimado" ? '<span class="badge info">Estimado</span>' : c.info.estado === "falta_cantidad" ? '<span class="badge warn">Pendiente</span>' : ""}</span></a></li>`).join("")}</ul>`
             : `<p class="hint" style="margin:0">No participa en campañas. Se agrega desde la ficha de la campaña.</p>`,
         })}
-        ${lineFold("Publicidad asignada", L.publicidad.total, L.publicidad.gastos)}
+        ${L.publicidad.coleccion ? fold({
+          title: "Publicidad asignada", total: moneyM(L.publicidad.total),
+          extra: u.n && !M.isZero(L.publicidad.total) ? `${perUnit(L.publicidad.total, u.n)} por unidad` : "",
+          body: `<ul class="list">${L.publicidad.gastos.map((g) => gastoRow(g)).join("")}${publiColRow(L.publicidad.coleccion)}</ul>`,
+        }) : lineFold("Publicidad asignada", L.publicidad.total, L.publicidad.gastos)}
         <div class="row" style="font-weight:650"><span class="row-main">Total directo asignado</span>
           <span class="row-end"><b class="money">${moneyM(sel.directo)}</b>${u.n ? `<span class="row-sub">${perUnit(sel.directo, u.n)} por unidad</span>` : ""}</span></div>
       </section>
-      ${L.publicidad.gastos.length && u.n ? `<p class="hint" style="margin:0 4px">Publicidad asignada por unidad producida: ${perUnit(L.publicidad.total, u.n)}. No es el costo de conseguir una venta.</p>` : ""}
+      ${(L.publicidad.gastos.length || L.publicidad.coleccion) && u.n ? `<p class="hint" style="margin:0 4px">Publicidad asignada por unidad producida: ${perUnit(L.publicidad.total, u.n)}. No es el costo de conseguir una venta.</p>` : ""}
+
+      <h2 class="section-label">Rendimiento de tela</h2>
+      ${telaCard(sel.tela, u)}
 
       <h2 class="section-label">Conceptos de producción</h2>
       <section class="card flush"><ul class="list">
         ${[...conceptosProd, ...extraConceptos].map((c) => {
           const gs = L.produccion.gastos.filter((g) => (g.concepto || "Sin concepto") === c);
           const na = I.noAplica.has(`${t.id}|${c}`);
+          const kg = esTela(c) ? gs.reduce((s, g) => s + (g.kg || 0), 0) : 0;
           let end;
           if (gs.length) end = `<b class="money">${moneyM(tot(gs))}</b>${gs.some((g) => g.estimado) ? '<span class="badge info">Estimado</span>' : '<span class="badge ok">Confirmado</span>'}`;
           else if (na) end = `<span class="badge">No aplica</span>`;
           else end = `<span class="badge warn">Pendiente</span>`;
-          return `<li><div class="row"><span class="row-main"><span class="row-title">${esc(c)}</span></span><span class="row-end">${end}</span>
+          return `<li><div class="row"><span class="row-main"><span class="row-title">${esc(c)}</span>${kg ? `<span class="row-sub">${fmtKg(kg)} kg</span>` : ""}</span><span class="row-end">${end}</span>
             ${!gs.length && !cerrada ? `<button class="btn ghost sm" data-na="${esc(c)}" data-on="${na ? "" : "1"}">${na ? "Deshacer" : "No aplica"}</button>` : ""}</div></li>`;
         }).join("")}
       </ul></section>
@@ -506,8 +518,42 @@ function vProducto(id, q) {
   };
 }
 
+function publiColRow(pc) {
+  const { coleccion, info, monto } = pc;
+  return `<li><a class="row" href="#/coleccion/${coleccion.id}">
+    <span class="row-main"><span class="row-title wrap">Publicidad de la colección ${esc(coleccion.nombre)}</span>
+    <span class="row-sub wrap">Total ${moneyM(info.total)} · ${info.totalUnidades ? fmtInt(info.totalUnidades) + " u. en la colección" : "faltan cantidades"}</span></span>
+    <span class="row-end"><b class="money">${monto ? moneyM(monto) : "Pendiente"}</b>${info.estado === "estimado" ? '<span class="badge info">Estimado</span>' : info.estado === "falta_cantidad" ? '<span class="badge warn">Pendiente</span>' : ""}</span></a></li>`;
+}
+
+const consumoTxt = (kg) => (kg < 1 ? `${fmtInt(Math.round(kg * 1000))} g` : `${fmtKg(kg)} kg`);
+
+function telaCard(tela, u) {
+  if (!tela.hayTela) {
+    return `<section class="card"><p class="hint" style="margin:0">Cuando cargues la compra de tela (Producción → concepto Tela) con los kilos, acá vas a ver cuántas prendas salen por kilo.</p></section>`;
+  }
+  if (!tela.kg) {
+    return `<section class="card"><div class="note warn" style="margin:0">${icon("alert", "sm")}<span>${tela.sinKg === 1 ? "La compra de tela no tiene" : `Las ${tela.sinKg} compras de tela no tienen`} los kilos cargados. Editala${tela.sinKg === 1 ? "" : "s"} y agregá los kg para ver el rendimiento.</span></div></section>`;
+  }
+  const est = u.estimada ? " (estimado)" : "";
+  return `<section class="card stack">
+    <div class="levels" aria-label="Rendimiento de tela">
+      <div class="level main"><span class="l-name">Rendimiento${est}</span><span class="l-val num">${tela.unidadesPorKg ? `${fmtKg(tela.unidadesPorKg)} u. por kg` : "—"}</span></div>
+      <div class="level"><span class="l-name">Consumo por prenda${est}</span><span class="l-val num">${tela.kgPorUnidad ? consumoTxt(tela.kgPorUnidad) : "—"}</span></div>
+      <div class="level"><span class="l-name">Tela comprada<span class="sub xs" style="display:block">${moneyM(tela.total)} · ${moneyM(tela.porKg, true)} por kg</span></span><span class="l-val num">${fmtKg(tela.kg)} kg</span></div>
+      <div class="level"><span class="l-name">Unidades que salieron</span><span class="l-val num">${u.n == null ? "—" : unitsTxt(u)}</span></div>
+    </div>
+    ${tela.telas.length > 1 ? `<ul class="list">${tela.telas.map((x) => `<li class="row" style="padding:8px 0">
+      <span class="row-main"><span class="row-title">${esc(x.nombre)}</span><span class="row-sub money">${fmtKg(x.kg)} kg · ${moneyM(x.porKg, true)} por kg</span></span>
+      <span class="row-end"><b class="num">${x.unidadesPorKg ? `${fmtKg(x.unidadesPorKg)} u./kg` : "—"}</b>${x.kgPorUnidad ? `<span class="row-sub">${consumoTxt(x.kgPorUnidad)} por prenda</span>` : ""}</span></li>`).join("")}</ul>` : ""}
+    ${u.n == null ? `<p class="hint" style="margin:0">Cargá la cantidad de unidades para calcular el rendimiento.</p>` : ""}
+    ${tela.sinKg ? `<p class="hint" style="margin:0">${plural(tela.sinKg, "compra")} de tela sin kilos no entra${tela.sinKg === 1 ? "" : "n"} en el cálculo.</p>` : ""}
+  </section>`;
+}
+
 const CAMPOS = { monto: "Importe", cant_estimada: "Cantidad estimada", cant_final: "Cantidad final", estado: "Estado", cerrada: "Cerrada",
-  categoria: "Categoría", tanda_id: "Tanda", concepto: "Concepto", descripcion: "Descripción", fecha: "Fecha", nombre: "Nombre", estimado: "Estimado" };
+  categoria: "Categoría", tanda_id: "Tanda", concepto: "Concepto", descripcion: "Descripción", fecha: "Fecha", nombre: "Nombre", estimado: "Estimado",
+  kg: "Kilos de tela", coleccion_id: "Colección" };
 function histText(h) {
   let d; try { d = JSON.parse(h.detalle); } catch { return h.detalle; }
   const g = h.entidad === "gastos" ? S.I.gasto.get(h.entidad_id) : null;
@@ -642,6 +688,13 @@ function vColeccion(id) {
   if (!c) return null;
   const cc = coleccionCosts(I, id);
   const L = cc.lineas;
+  const pc = publiColeccionInfo(I, id);
+  const pcTxt = {
+    sin_productos: ["warn", "Sin productos", "La colección todavía no tiene productos entre los que repartir."],
+    falta_cantidad: ["warn", "Reparto pendiente", `Falta la cantidad de: ${pc.faltan.map((p) => tandaLabel(I, p.tanda)).join(", ")}.`],
+    estimado: ["info", "Reparto estimado", "Usa cantidades o importes estimados. Se recalcula solo cuando cargues los finales."],
+    final: ["ok", "Reparto final", "Con cantidades finales."],
+  }[pc.estado];
   const lf = (title, l, extra = "") => fold({ title, total: moneyM(l.total), extra, body: l.gastos.length ? `<ul class="list">${l.gastos.map((g) => gastoRow(g)).join("")}</ul>` : `<p class="hint" style="margin:0">Sin gastos.</p>` });
   return {
     title: c.nombre,
@@ -663,6 +716,15 @@ function vColeccion(id) {
       </section>
       <p class="hint" style="margin:0 4px">Cada gasto se suma una sola vez. No incluye gastos generales de la marca.</p>
 
+      <h2 class="section-label">Publicidad de la colección</h2>
+      ${M.isZero(pc.total) ? "" : `<section class="card">
+        <div class="card-head"><b class="money" style="font-size:20px">${moneyM(pc.total)}</b><span class="badge ${pcTxt[0]}">${pcTxt[1]}</span></div>
+        <p class="hint" style="margin:0 0 12px">${esc(pcTxt[2])} Se reparte entre las unidades de todos sus productos.</p>
+        ${pc.parts.length ? repartoTable(pc) : ""}
+      </section>
+      <section class="card flush">${gastoList(pc.gastos)}</section>`}
+      <button class="btn secondary" id="add-publi">${icon("megaphone", "sm")} Cargar publicidad a toda la colección</button>
+
       <h2 class="section-label">Productos y tandas</h2>
       <section class="card flush">
         ${cc.tandas.length ? `<ul class="list">${cc.tandas.map((t) => {
@@ -676,7 +738,10 @@ function vColeccion(id) {
       <h2 class="section-label">Campañas</h2>
       <section class="card flush">${campanasList(cc.campanas)}
         <button class="row add" id="new-camp"><span class="ico-box">${icon("plus")}</span><span class="row-main">Nueva campaña en esta colección</span></button></section>`,
-    bind() { $("#new-camp").onclick = () => nuevaCampana(id); },
+    bind() {
+      $("#new-camp").onclick = () => nuevaCampana(id);
+      $("#add-publi").onclick = () => openCarga(ctx, null, { categoria: "publicidad", coleccion_id: id });
+    },
   };
 }
 
@@ -739,15 +804,7 @@ function vCampana(id) {
 
       <h2 class="section-label">Reparto por unidades</h2>
       <section class="card">
-        ${info.parts.length ? `<table class="cost-table"><thead><tr><th>Producto</th><th>Unid.</th><th>Asignado</th><th>Por u.</th></tr></thead><tbody>
-          ${info.parts.map((p) => {
-            const a = info.asignado.get(p.tanda.id);
-            return `<tr><td><a href="#/producto/${p.tanda.producto_id}?tanda=${p.tanda.id}">${esc(tandaLabel(I, p.tanda))}</a></td>
-              <td class="money">${p.n == null ? '<span class="badge warn">Falta</span>' : fmtInt(p.n) + (p.estimada ? '<span class="sub">est.</span>' : "")}</td>
-              <td class="money">${a ? moneyM(a) : "—"}</td><td class="money">${a && p.n ? perUnit(a, p.n) : "—"}</td></tr>`;
-          }).join("")}
-          <tr class="total"><td>Total</td><td class="money">${info.totalUnidades ? fmtInt(info.totalUnidades) : "—"}</td><td class="money">${info.asignado.size ? moneyM(M.sum([...info.asignado.values()])) : "—"}</td><td></td></tr>
-        </tbody></table>
+        ${info.parts.length ? `${repartoTable(info)}
         <p class="hint" style="margin:12px 0 0">Cada unidad participante absorbe la misma parte: gasto × unidades del producto ÷ unidades totales. La campaña se cuenta una sola vez en la colección.</p>`
         : `<div class="empty" style="padding:8px">Todavía no hay productos participantes.</div>`}
         <button class="btn secondary block" id="parts" style="margin-top:12px">${icon("shirt", "sm")} Elegir productos participantes</button>
@@ -761,6 +818,19 @@ function vCampana(id) {
       $("#add-g").onclick = () => openCarga(ctx, null, { categoria: "campanas", campana_id: id });
     },
   };
+}
+
+function repartoTable(info) {
+  const I = S.I;
+  return `<table class="cost-table"><thead><tr><th>Producto</th><th>Unid.</th><th>Asignado</th><th>Por u.</th></tr></thead><tbody>
+    ${info.parts.map((p) => {
+      const a = info.asignado.get(p.tanda.id);
+      return `<tr><td><a href="#/producto/${p.tanda.producto_id}?tanda=${p.tanda.id}">${esc(tandaLabel(I, p.tanda))}</a></td>
+        <td class="money">${p.n == null ? '<span class="badge warn">Falta</span>' : fmtInt(p.n) + (p.estimada ? '<span class="sub">est.</span>' : "")}</td>
+        <td class="money">${a ? moneyM(a) : "—"}</td><td class="money">${a && p.n ? perUnit(a, p.n) : "—"}</td></tr>`;
+    }).join("")}
+    <tr class="total"><td>Total</td><td class="money">${info.totalUnidades ? fmtInt(info.totalUnidades) : "—"}</td><td class="money">${info.asignado.size ? moneyM(M.sum([...info.asignado.values()])) : "—"}</td><td></td></tr>
+  </tbody></table>`;
 }
 
 function elegirParticipantes(c, info) {
@@ -863,6 +933,7 @@ function vOpcion(id) {
 /* ================= Movimientos ================= */
 
 function gastoColeccion(I, g) {
+  if (g.coleccion_id) return g.coleccion_id;
   if (g.tanda_id) return tandaColeccionId(I, I.tanda.get(g.tanda_id) || {});
   if (g.campana_id) return I.campana.get(g.campana_id)?.coleccion_id ?? null;
   if (g.producto_id) return I.producto.get(g.producto_id)?.coleccion_id ?? null;
@@ -943,12 +1014,12 @@ function vMovimientos(q) {
 
 function exportCsv(lista) {
   const I = S.I;
-  const rows = [["Fecha", "Importe", "Moneda", "Categoría", "Asociado a", "Concepto", "Descripción", "Medio de pago", "Estado del pago", "Pagado", "Pendiente", "Proveedor", "Cantidad", "Estimado"]];
+  const rows = [["Fecha", "Importe", "Moneda", "Categoría", "Asociado a", "Concepto", "Descripción", "Medio de pago", "Estado del pago", "Pagado", "Pendiente", "Proveedor", "Cantidad", "Kg de tela", "Estimado"]];
   for (const g of lista) {
     const p = pagoInfo(I, g);
     rows.push([g.fecha, (g.monto / 100).toFixed(2).replace(".", ","), g.moneda, CAT[g.categoria]?.nombre || "Sin categoría", destinoTexto(I, g) || "",
       g.concepto || "", g.descripcion || "", g.medio_pago || "", { pagado: "Pagado", parcial: "Pago parcial", pendiente: "Pendiente" }[p.estado],
-      (p.pagado / 100).toFixed(2).replace(".", ","), (p.pendiente / 100).toFixed(2).replace(".", ","), g.proveedor || "", g.cantidad || "", g.estimado ? "Sí" : ""]);
+      (p.pagado / 100).toFixed(2).replace(".", ","), (p.pendiente / 100).toFixed(2).replace(".", ","), g.proveedor || "", g.cantidad || "", g.kg ? String(g.kg).replace(".", ",") : "", g.estimado ? "Sí" : ""]);
   }
   const csv = "﻿" + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\n");
   download(new Blob([csv], { type: "text/csv;charset=utf-8" }), `gastos-desgoises-${today()}.csv`);
@@ -972,7 +1043,7 @@ function vGasto(id) {
   const t = g.tanda_id ? I.tanda.get(g.tanda_id) : null;
   const bloqueado = !!t?.cerrada;
   const destLink = g.muestra_id ? `#/muestra/${g.muestra_id}` : t ? `#/producto/${t.producto_id}?tanda=${t.id}` : g.producto_id ? `#/producto/${g.producto_id}`
-    : g.campana_id ? `#/campana/${g.campana_id}` : g.opcion_id ? `#/opcion/${g.opcion_id}` : null;
+    : g.campana_id ? `#/campana/${g.campana_id}` : g.opcion_id ? `#/opcion/${g.opcion_id}` : g.coleccion_id ? `#/coleccion/${g.coleccion_id}` : null;
   const dest = destinoTexto(I, g);
   const dato = (k, v) => (v ? `<li class="row" style="min-height:48px"><span class="row-main muted small">${k}</span><span class="row-end" style="max-width:65%;text-align:right;white-space:normal">${v}</span></li>` : "");
 
@@ -1000,6 +1071,7 @@ function vGasto(id) {
         ${dato("Medio de pago", esc(g.medio_pago))}
         ${dato("Proveedor", esc(g.proveedor))}
         ${g.cantidad ? dato("Cantidad", `${fmtInt(g.cantidad)} u. · ${money(g.monto / g.cantidad, g.moneda, true)} c/u`) : ""}
+        ${g.kg ? dato("Tela", `${fmtKg(g.kg, 3)} kg · ${money(g.monto / g.kg, g.moneda, true)} por kg`) : ""}
         ${g.cubre_meses > 1 ? dato("Período que cubre", `${g.cubre_meses} meses (${money(g.monto / g.cubre_meses, g.moneda)} por mes)`) : ""}
         ${g.en_cantidad ? dato("Tipo", "Compra de insumos en cantidad") : ""}
       </ul></section>
@@ -1074,8 +1146,9 @@ const LISTAS = {
   campanas: { titulo: "Campañas de contenido", table: "campanas", link: (x) => `#/campana/${x.id}`, icon: "camera", nuevo: "Nueva campaña", label: "Nombre de la campaña" },
   suscripcion: { titulo: "Suscripciones y fijos", tipo: "suscripcion", link: (x) => `#/opcion/${x.id}`, icon: "repeat", nuevo: "Agregar servicio", label: "Nombre del servicio" },
   packaging: { titulo: "Packaging y presentación", tipo: "packaging", link: (x) => `#/opcion/${x.id}`, icon: "package", nuevo: "Agregar insumo", label: "Nombre del insumo" },
-  concepto_prod: { titulo: "Conceptos de producción", tipo: "concepto_prod", icon: "tag", nuevo: "Agregar concepto", label: "Concepto", hint: "Aparecen como opciones rápidas al cargar producción y en la lista de pendientes de cada tanda." },
-  concepto_campana: { titulo: "Conceptos de campaña", tipo: "concepto_campana", icon: "tag", nuevo: "Agregar concepto", label: "Concepto" },
+  concepto_prod: { titulo: "Conceptos de producción", tipo: "concepto_prod", cat: "produccion", icon: "tag", nuevo: "Agregar concepto", label: "Concepto", hint: "Aparecen como opciones rápidas al cargar producción y en la lista de pendientes de cada tanda." },
+  concepto_muestra: { titulo: "Conceptos de muestras", tipo: "concepto_muestra", cat: "muestras", icon: "tag", nuevo: "Agregar concepto", label: "Concepto", hint: "Aparecen como opciones rápidas al cargar un gasto de muestras." },
+  concepto_campana: { titulo: "Conceptos de campaña", tipo: "concepto_campana", cat: "campanas", icon: "tag", nuevo: "Agregar concepto", label: "Concepto" },
   medio_pago: { titulo: "Medios de pago", tipo: "medio_pago", icon: "wallet", nuevo: "Agregar medio de pago", label: "Medio de pago" },
 };
 
@@ -1092,7 +1165,7 @@ function vGestionar() {
     html: `
       <section class="card flush"><ul class="list">${["muestras", "colecciones", "campanas"].map(link).join("")}</ul></section>
       <h2 class="section-label">Opciones de carga</h2>
-      <section class="card flush"><ul class="list">${["suscripcion", "packaging", "concepto_prod", "concepto_campana", "medio_pago"].map(link).join("")}</ul></section>
+      <section class="card flush"><ul class="list">${["suscripcion", "packaging", "concepto_prod", "concepto_muestra", "concepto_campana", "medio_pago"].map(link).join("")}</ul></section>
       <h2 class="section-label">Herramientas</h2>
       <section class="card flush"><ul class="list">
         <li><a class="row" href="#/simular"><span class="ico-box">${icon("calculator")}</span><span class="row-main"><span class="row-title wrap">Simular cobertura de gastos generales</span><span class="row-sub">Cuánto debería cubrir cada venta</span></span>${icon("right", "chev")}</a></li>
@@ -1128,7 +1201,7 @@ function vGestionarLista(k) {
     if (L.table === "campanas") return moneyM(campaignInfo(I, x.id).total);
     if (L.tipo === "suscripcion" || L.tipo === "packaging") return moneyM(tot(I.gastosDeOpcion.get(x.id) || []));
     if (L.tipo === "medio_pago") return plural(D.gastos.filter((g) => g.medio_pago === x.nombre).length, "gasto");
-    return plural(D.gastos.filter((g) => g.concepto === x.nombre).length, "gasto");
+    return plural(D.gastos.filter((g) => g.concepto === x.nombre && (!L.cat || g.categoria === L.cat)).length, "gasto");
   };
   const row = (x) => L.link
     ? `<li><a class="row" href="${L.link(x)}"><span class="ico-box">${icon(L.icon)}</span><span class="row-main"><span class="row-title">${esc(x.nombre)}</span>

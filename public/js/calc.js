@@ -2,11 +2,11 @@
 // Los importes están en centavos y se agrupan por moneda ({ ARS: 123, USD: 4 }); nunca se suman monedas distintas.
 
 export const CATEGORIAS = [
-  { key: "muestras", nombre: "Muestras", destino: "muestra", icon: "scissors" },
+  { key: "muestras", nombre: "Muestras", destino: "muestra", conceptos: "concepto_muestra", icon: "scissors" },
   { key: "produccion", nombre: "Producción de ropa", destino: "producto", tanda: true, conceptos: "concepto_prod", icon: "shirt" },
   { key: "molderia", nombre: "Moldería", destino: "producto", icon: "ruler" },
   { key: "campanas", nombre: "Campañas de contenido de colecciones", corto: "Campañas de contenido", destino: "campana", conceptos: "concepto_campana", icon: "camera" },
-  { key: "publicidad", nombre: "Publicidad", destino: "producto", tanda: true, icon: "megaphone" },
+  { key: "publicidad", nombre: "Publicidad", destino: "producto", tanda: true, coleccion: true, icon: "megaphone" },
   { key: "suscripciones", nombre: "Suscripciones y fijos", destino: "opcion", opcionTipo: "suscripcion", general: true, icon: "repeat" },
   { key: "envios", nombre: "Envíos y posventa", general: true, icon: "truck" },
   { key: "equipamiento", nombre: "Equipamiento", general: true, icon: "wrench" },
@@ -47,6 +47,7 @@ export function index(D) {
     gastosDeMuestra: group(D.gastos, "muestra_id"),
     gastosDeCampana: group(D.gastos, "campana_id"),
     gastosDeOpcion: group(D.gastos, "opcion_id"),
+    gastosDeColeccion: group(D.gastos, "coleccion_id"),
     tandasDeProducto: group(D.tandas, "producto_id"),
     muestrasDeProducto: group(D.muestras, "producto_id"),
     noAplica: new Set(D.tandaConceptos.filter((c) => c.estado === "no_aplica").map((c) => `${c.tanda_id}|${c.concepto}`)),
@@ -59,6 +60,7 @@ export function index(D) {
     I.campanasDeTanda.get(ct.tanda_id).push(ct.campana_id);
   }
   I.campaignCache = new Map();
+  I.publiColCache = new Map();
   return I;
 }
 
@@ -111,11 +113,26 @@ export function campaignInfo(I, campanaId) {
   if (I.campaignCache.has(campanaId)) return I.campaignCache.get(campanaId);
   const gastos = I.gastosDeCampana.get(campanaId) || [];
   const total = M.sum(gastos.filter((g) => g.categoria === "campanas").map((g) => M.of(g.moneda, g.monto)));
-  const tandaIds = I.tandasDeCampana.get(campanaId) || [];
-  const parts = tandaIds.map((id) => {
-    const t = I.tanda.get(id);
-    return { tanda: t, ...unidades(t) };
-  }).filter((p) => p.tanda);
+  const tandas = (I.tandasDeCampana.get(campanaId) || []).map((id) => I.tanda.get(id));
+  const info = { id: campanaId, ...repartir(total, tandas, gastos) };
+  I.campaignCache.set(campanaId, info);
+  return info;
+}
+
+// Publicidad cargada a una colección entera: se reparte entre las unidades de todas sus tandas.
+export function publiColeccionInfo(I, coleccionId) {
+  if (I.publiColCache.has(coleccionId)) return I.publiColCache.get(coleccionId);
+  const gastos = (I.gastosDeColeccion.get(coleccionId) || []).filter((g) => g.categoria === "publicidad" && !g.tanda_id);
+  const total = M.sum(gastos.map((g) => M.of(g.moneda, g.monto)));
+  const tandas = I.D.tandas.filter((t) => tandaColeccionId(I, t) === coleccionId);
+  const info = { id: coleccionId, ...repartir(total, tandas, gastos) };
+  I.publiColCache.set(coleccionId, info);
+  return info;
+}
+
+// Reparte un total entre tandas según sus unidades (finales o, si no hay, estimadas).
+function repartir(total, tandas, gastos) {
+  const parts = tandas.filter(Boolean).map((t) => ({ tanda: t, ...unidades(t) }));
   const faltan = parts.filter((p) => p.n == null);
   let estado;
   if (!parts.length) estado = "sin_productos";
@@ -132,9 +149,7 @@ export function campaignInfo(I, campanaId) {
       parts.forEach((p, i) => { if (split[i]) asignado.get(p.tanda.id)[moneda] = split[i]; });
     }
   }
-  const info = { id: campanaId, gastos, total, parts, totalUnidades, estado, asignado, faltan };
-  I.campaignCache.set(campanaId, info);
-  return info;
+  return { gastos, total, parts, totalUnidades, estado, asignado, faltan };
 }
 
 /* ---------- Costos de una tanda ---------- */
@@ -153,12 +168,16 @@ export function tandaCosts(I, tandaId) {
     return { campana: I.campana.get(cid), info: c, monto: c.asignado.get(tandaId) || null };
   });
 
+  const colId = tandaColeccionId(I, t);
+  const pc = colId != null ? publiColeccionInfo(I, colId) : null;
+  const publiCol = pc && !M.isZero(pc.total) ? { coleccion: I.coleccion.get(colId), info: pc, monto: pc.asignado.get(tandaId) || null } : null;
+
   const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
   const lineas = {
     produccion: { total: tot(prod), gastos: prod },
     desarrollo: { total: tot(desa), gastos: desa, aplica: esPrimera },
     campana: { total: M.sum(campanas.map((c) => c.monto || {})), campanas },
-    publicidad: { total: tot(publi), gastos: publi },
+    publicidad: { total: M.add(tot(publi), publiCol?.monto || {}), gastos: publi, coleccion: publiCol },
   };
   const directo = M.sum([lineas.produccion.total, lineas.desarrollo.total, lineas.campana.total, lineas.publicidad.total]);
 
@@ -172,17 +191,57 @@ export function tandaCosts(I, tandaId) {
   for (const c of campanas) {
     if (c.info.estado === "falta_cantidad") avisos.push(`Reparto de ${c.campana.nombre} pendiente: falta cantidad en ${c.info.faltan.length} producto${c.info.faltan.length > 1 ? "s" : ""}`);
   }
-  const hayEstimados = u.estimada || [...prod, ...desa, ...publi].some((g) => g.estimado) || campanas.some((c) => c.info.estado === "estimado");
+  if (publiCol?.info.estado === "falta_cantidad" && u.n != null) {
+    const n = publiCol.info.faltan.length;
+    avisos.push(`Reparto de la publicidad de ${publiCol.coleccion?.nombre} pendiente: falta cantidad en ${n} producto${n > 1 ? "s" : ""}`);
+  }
+  const hayEstimados = u.estimada || [...prod, ...desa, ...publi].some((g) => g.estimado) || campanas.some((c) => c.info.estado === "estimado") ||
+    publiCol?.info.estado === "estimado";
 
   let estado;
   if (t.cerrada) estado = "cerrado";
-  else if (u.n == null || campanas.some((c) => c.info.estado === "falta_cantidad")) estado = "incompleto";
+  else if (u.n == null || campanas.some((c) => c.info.estado === "falta_cantidad") || publiCol?.info.estado === "falta_cantidad") estado = "incompleto";
   else if (hayEstimados) estado = "estimado";
   else estado = "al_dia";
 
   return {
     tanda: t, unidades: u, esPrimera, lineas, directo, estado, avisos, conceptosPendientes,
+    tela: telaInfo(prod, u.n),
     porUnidad: (m) => (u.n ? M.scale(m, 1 / u.n) : null),
+  };
+}
+
+/* ---------- Rendimiento de tela ---------- */
+
+export const esTela = (concepto) => /^tela/i.test(concepto || "");
+
+// Kilos de tela comprados para una tanda contra las unidades que salieron.
+// Cada tela (por descripción) se mide por separado y también todas juntas.
+export function telaInfo(gastos, n) {
+  const telas = gastos.filter((g) => esTela(g.concepto));
+  const conKg = telas.filter((g) => g.kg > 0);
+  const medir = (gs) => {
+    const kg = gs.reduce((s, g) => s + g.kg, 0);
+    const total = M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
+    return {
+      kg, total, gastos: gs,
+      porKg: kg ? M.scale(total, 1 / kg) : null, // costo de la tela por kilo
+      unidadesPorKg: kg && n ? n / kg : null,    // prendas que salen de cada kilo
+      kgPorUnidad: kg && n ? kg / n : null,      // consumo de tela por prenda
+    };
+  };
+  const grupos = new Map();
+  for (const g of conKg) {
+    const nombre = (g.descripcion || g.proveedor || "Tela").trim();
+    const k = nombre.toLowerCase();
+    if (!grupos.has(k)) grupos.set(k, { nombre, gastos: [] });
+    grupos.get(k).gastos.push(g);
+  }
+  return {
+    ...medir(conKg),
+    telas: [...grupos.values()].map((x) => ({ nombre: x.nombre, ...medir(x.gastos) })),
+    sinKg: telas.length - conKg.length,
+    hayTela: telas.length > 0,
   };
 }
 
@@ -205,7 +264,8 @@ export function coleccionCosts(I, coleccionId) {
   const take = (gs) => gs.filter((g) => !seen.has(g.id) && seen.add(g.id));
 
   const prod = take(I.D.gastos.filter((g) => g.categoria === "produccion" && tandaSet.has(g.tanda_id)));
-  const publi = take(I.D.gastos.filter((g) => g.categoria === "publicidad" && tandaSet.has(g.tanda_id)));
+  const publi = take(I.D.gastos.filter((g) => g.categoria === "publicidad" &&
+    (tandaSet.has(g.tanda_id) || (!g.tanda_id && g.coleccion_id === coleccionId))));
   const productos = [...new Set(tandas.map((t) => t.producto_id))];
   const desa = take(productos.filter((pid) => tandaSet.has(primeraTanda(I, pid)?.id)).flatMap((pid) => gastosDesarrollo(I, pid)));
   const campanas = I.D.campanas.filter((c) => c.coleccion_id === coleccionId);
@@ -237,6 +297,7 @@ export function faltaAsignar(g) {
   if (!c) return true;
   if (c.destino === "muestra") return !g.muestra_id;
   if (c.destino === "campana") return !g.campana_id;
+  if (c.coleccion && g.coleccion_id) return false;
   if (c.destino === "producto") return c.tanda ? !g.tanda_id : !g.producto_id;
   return false;
 }
@@ -303,6 +364,12 @@ export function avisos(I) {
     else if (info.estado === "falta_cantidad") out.push({ tipo: "campana", texto: `Campaña ${c.nombre}: reparto pendiente (faltan cantidades)`, ruta: `#/campana/${c.id}` });
     else if (info.estado === "estimado") out.push({ tipo: "campana", texto: `Campaña ${c.nombre}: reparto estimado`, ruta: `#/campana/${c.id}` });
   }
+  for (const col of I.D.colecciones) {
+    const info = publiColeccionInfo(I, col.id);
+    if (M.isZero(info.total)) continue;
+    if (info.estado === "sin_productos") out.push({ tipo: "campana", texto: `Publicidad de ${col.nombre}: la colección no tiene productos`, ruta: `#/coleccion/${col.id}` });
+    else if (info.estado === "falta_cantidad") out.push({ tipo: "campana", texto: `Publicidad de ${col.nombre}: reparto pendiente (faltan cantidades)`, ruta: `#/coleccion/${col.id}` });
+  }
   const sinAsignar = I.D.gastos.filter(faltaAsignar);
   if (sinAsignar.length) out.push({ tipo: "asignar", texto: `${sinAsignar.length === 1 ? "Un gasto pendiente" : `${sinAsignar.length} gastos pendientes`} de asignar`, ruta: "#/movimientos?estado=sin_asignar" });
 
@@ -326,7 +393,7 @@ export function posiblesDuplicados(gastos) {
       if ((Date.parse(b.fecha) - Date.parse(a.fecha)) / 864e5 > 2) break;
       if (a.monto === b.monto && a.moneda === b.moneda && a.categoria === b.categoria &&
           a.tanda_id === b.tanda_id && a.muestra_id === b.muestra_id && a.campana_id === b.campana_id &&
-          a.opcion_id === b.opcion_id && (a.concepto || "") === (b.concepto || "") && !a.notion_id) {
+          a.opcion_id === b.opcion_id && a.coleccion_id === b.coleccion_id && (a.concepto || "") === (b.concepto || "") && !a.notion_id) {
         pares.push([a, b]);
       }
     }
@@ -350,6 +417,7 @@ export function destinoTexto(I, g) {
   if (g.producto_id) return I.producto.get(g.producto_id)?.nombre;
   if (g.campana_id) return I.campana.get(g.campana_id)?.nombre;
   if (g.opcion_id) return I.opcion.get(g.opcion_id)?.nombre;
+  if (g.coleccion_id) { const c = I.coleccion.get(g.coleccion_id); return c ? `Colección ${c.nombre}` : null; }
   return null;
 }
 

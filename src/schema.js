@@ -1,14 +1,14 @@
 // Estructura de la base. Se aplica sola la primera vez que el Worker recibe un pedido.
 // Si más adelante cambia, subir SCHEMA_VERSION y agregar las sentencias nuevas al final de MIGRATIONS.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const MIGRATIONS = {
   1: [
     `CREATE TABLE IF NOT EXISTS ajustes (clave TEXT PRIMARY KEY, valor TEXT)`,
     `CREATE TABLE IF NOT EXISTS opciones (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tipo TEXT NOT NULL,              -- suscripcion | packaging | concepto_prod | concepto_campana | medio_pago
+      tipo TEXT NOT NULL,              -- suscripcion | packaging | concepto_prod | concepto_campana | concepto_muestra | medio_pago
       nombre TEXT NOT NULL,
       orden INTEGER NOT NULL DEFAULT 0,
       archivada INTEGER NOT NULL DEFAULT 0,
@@ -119,6 +119,12 @@ export const MIGRATIONS = {
     ...seed("concepto_prod", ["Tela", "Corte", "Confección", "Estampa", "Lavadero", "Avíos"]),
     ...seed("concepto_campana", ["Estudio", "Fotógrafo", "Modelos", "Traslados", "Utilería", "Otros"]),
     ...seed("medio_pago", ["Mercado Pago", "Transferencia", "Efectivo", "Visa crédito", "Mastercard crédito", "MODO"]),
+  ],
+  2: [
+    // Kilos de tela comprados (para el rendimiento) y publicidad cargada a una colección entera.
+    `ALTER TABLE gastos ADD COLUMN kg REAL`,
+    `ALTER TABLE gastos ADD COLUMN coleccion_id INTEGER REFERENCES colecciones(id)`,
+    ...seed("concepto_muestra", ["Tela", "Molde", "Corte", "Confección", "Cadete"]),
   ],
 };
 

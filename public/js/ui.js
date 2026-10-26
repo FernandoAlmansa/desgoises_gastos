@@ -92,6 +92,15 @@ export function liveFormat(input) {
 }
 export const centsToInput = (c) => (c == null ? "" : nf0.format(Math.floor(c / 100)) + (c % 100 ? "," + String(c % 100).padStart(2, "0") : ""));
 
+// Kilos: "12,5" o "12.5" → 12.5 ; 12.5 → "12,5"
+export function parseKg(str) {
+  let s = String(str || "").replace(/[^\d.,]/g, "");
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  const v = Number(s);
+  return s && Number.isFinite(v) && v > 0 ? v : null;
+}
+export const fmtKg = (n, dec = 2) => new Intl.NumberFormat("es-AR", { maximumFractionDigits: dec }).format(n);
+
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const MES_C = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 export const today = () => new Date().toLocaleDateString("sv-SE");

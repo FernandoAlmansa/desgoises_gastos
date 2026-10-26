@@ -97,7 +97,8 @@ main > * { min-width: 0; }
   background: var(--bar); backdrop-filter: saturate(1.4) blur(16px); -webkit-backdrop-filter: saturate(1.4) blur(16px);
   border-top: 1px solid var(--border);
 }
-.tabbar ul { list-style: none; margin: 0 auto; padding: 0; max-width: 560px; display: grid; grid-template-columns: repeat(5, 1fr); align-items: center; }
+.tabbar ul { list-style: none; margin: 0 auto; padding: 0; max-width: 560px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: center; }
+.tabbar li { display: grid; min-width: 0; } /* así el botón + queda centrado en su columna */
 .tab {
   display: grid; justify-items: center; gap: 2px; min-height: 52px; padding: 6px 2px; border-radius: 12px;
   font-size: 11px; font-weight: 500; color: var(--muted); transition: color .15s ease, background-color .15s ease;
@@ -200,6 +201,9 @@ a.row:active, button.row:active, a.row:hover, button.row:hover { background: var
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 textarea.input { padding: 12px 14px; min-height: 80px; resize: vertical; }
+/* iOS le da a la fecha un ancho propio y se sale del borde */
+input[type="date"].input { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left; line-height: 46px; }
+input[type="date"].input::-webkit-date-and-time-value { text-align: left; }
 .input:focus, .select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .input[aria-invalid="true"] { border-color: var(--danger); }
 .select { appearance: none; -webkit-appearance: none; padding-right: 40px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; }

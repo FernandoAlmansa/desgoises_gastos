@@ -151,3 +151,28 @@ test("gasto importado sin categoría queda pendiente de asignar", () => {
   assert.equal(faltaAsignar({ categoria: "produccion", producto_id: 1 }), true);
   assert.equal(faltaAsignar({ categoria: "envios" }), false);
 });
+
+test("publicidad de una colección se reparte por unidades entre sus productos", () => {
+  const D = base();
+  D.gastos.push({ id: 20, fecha: "2026-10-10", monto: $(100000), moneda: "ARS", categoria: "publicidad", coleccion_id: 1 });
+  const I = index(D);
+  assert.equal(faltaAsignar(I.gasto.get(20)), false);
+  // 20 + 40 + 40 unidades estimadas
+  assert.equal(M.get(tandaCosts(I, 1).lineas.publicidad.total), $(20000));
+  assert.equal(M.get(tandaCosts(I, 2).lineas.publicidad.total), $(40000));
+  assert.equal(tandaCosts(I, 2).lineas.publicidad.coleccion.info.estado, "estimado");
+  // En la colección se cuenta una sola vez
+  assert.equal(M.get(coleccionCosts(I, 1).lineas.publicidad.total), $(100000));
+});
+
+test("rendimiento de tela: kilos comprados contra unidades", () => {
+  const D = base();
+  D.gastos.find((g) => g.id === 4).kg = 25; // Tela de la tanda 2 (40 u. estimadas)
+  D.gastos.push({ id: 21, fecha: "2026-10-03", monto: $(50000), moneda: "ARS", categoria: "produccion", producto_id: 2, tanda_id: 2, concepto: "Tela", descripcion: "Rib", kg: 5 });
+  const tela = tandaCosts(index(D), 2).tela;
+  assert.equal(tela.kg, 30);
+  assert.equal(tela.unidadesPorKg, 40 / 30);
+  assert.equal(tela.kgPorUnidad, 0.75);
+  assert.equal(tela.telas.length, 2);
+  assert.equal(M.get(tela.telas.find((t) => t.nombre === "Rib").porKg), $(10000));
+});
