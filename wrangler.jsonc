@@ -1,0 +1,19 @@
+{
+  // Mismo nombre que el Worker que ya existe: se reemplaza y conserva sus secretos (DASH_KEY, NOTION_*).
+  "name": "gastos-desgoises",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // La base se crea sola en el primer `wrangler deploy` (no hace falta poner database_id).
+  "d1_databases": [
+    { "binding": "DB", "database_name": "desgoises-gastos" }
+  ],
+  // Conserva las variables de texto cargadas en el panel (por ejemplo NOTION_DATABASE_ID).
+  "keep_vars": true,
+  "observability": { "enabled": true }
+}

@@ -1,0 +1,1227 @@
+// Des Goises · Gastos y costos. Navegación y pantallas.
+import {
+  CATEGORIAS, CAT, M, index, pagoInfo, unidades, tandaCosts, productoResumen, coleccionCosts, campaignInfo,
+  avisos, faltaAsignar, tandaLabel, destinoTexto, gastoTitulo, tandaColeccionId, generalesDelMes, simularCobertura,
+  addMonths, monthKey, gastosDesarrollo,
+} from "./calc.js";
+import {
+  icon, $, $$, esc, money, moneyM, fmtInt, parseAmount, liveFormat, centsToInput, today, thisMonth, monthName, fmtDate,
+  fmtDateLong, plural, api, AuthError, toast, sheet, confirmSheet, promptSheet, busy, uploadFile, fileUrl,
+} from "./ui.js";
+import { openCarga } from "./carga.js";
+
+const S = {
+  data: null, I: null,
+  mes: thisMonth(),       // período del Resumen
+  verArchivados: false,
+};
+const main = $("#main");
+const ctx = { I: () => S.I, reload, go: (h) => (location.hash = h) };
+
+/* ================= Arranque ================= */
+
+async function reload(keepScroll = true) {
+  S.data = await api("data");
+  S.I = index(S.data);
+  render(keepScroll);
+}
+
+async function start() {
+  try {
+    await reload(false);
+    showChrome(true);
+    // Acceso directo "Añadir gasto" del ícono en la pantalla de inicio
+    if (location.hash.includes("nuevo=1")) { history.replaceState(null, "", "#/resumen"); openCarga(ctx); }
+  } catch (err) {
+    if (err instanceof AuthError) return showLogin();
+    main.innerHTML = `<div class="card empty">${icon("alert", "lg")}<div>${esc(err.message)}</div><button class="btn" onclick="location.reload()">Reintentar</button></div>`;
+  }
+}
+
+function showChrome(on) {
+  $("#topbar").hidden = !on;
+  $("#tabbar").hidden = !on;
+}
+
+function showLogin(msg) {
+  showChrome(false);
+  main.innerHTML = `<div class="login"><form id="login">
+    <img class="logo" src="/img/logo.png" alt="Des Goises" width="180" height="28">
+    <h1 style="margin:0;text-align:center;font-size:22px">Gastos y costos</h1>
+    <div class="field"><label for="clave">Clave</label>
+      <input id="clave" class="input" type="password" autocomplete="current-password" required></div>
+    <div class="error-text" id="l-err" ${msg ? "" : "hidden"}>${esc(msg || "")}</div>
+    <button class="btn block">Entrar</button>
+    <p class="hint" style="text-align:center;margin:0">Se pide una sola vez en cada teléfono.</p>
+  </form></div>`;
+  main.style.paddingBottom = "0";
+  const f = $("#login");
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    busy(f.querySelector("button"), async () => {
+      try {
+        await api("login", { method: "POST", body: { clave: $("#clave").value } });
+      } catch (err) {
+        $("#l-err").textContent = err.message; $("#l-err").hidden = false;
+        throw err;
+      }
+      main.style.paddingBottom = "";
+      await start();
+    }).catch(() => {});
+  };
+  setTimeout(() => $("#clave")?.focus(), 50);
+}
+
+/* ================= Router ================= */
+
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, "");
+  const [path, qs] = h.split("?");
+  return { parts: (path || "resumen").split("/"), q: new URLSearchParams(qs || "") };
+}
+
+const ROOTS = { resumen: "Resumen", productos: "Productos", colecciones: "Colecciones", movimientos: "Movimientos", gestionar: "Gestionar" };
+
+function render(keepScroll = false) {
+  if (!S.I) return;
+  const { parts, q } = parseHash();
+  const [r, id, sub] = parts;
+  const y = window.scrollY;
+  const views = {
+    resumen: () => vResumen(),
+    productos: () => vProductos(q),
+    producto: () => vProducto(Number(id), q),
+    colecciones: () => vColecciones(),
+    coleccion: () => vColeccion(Number(id)),
+    campana: () => vCampana(Number(id)),
+    muestra: () => vMuestra(Number(id)),
+    opcion: () => vOpcion(Number(id)),
+    movimientos: () => vMovimientos(q),
+    gasto: () => vGasto(Number(id)),
+    gestionar: () => (id ? vGestionarLista(id) : vGestionar()),
+    simular: () => vSimular(),
+  };
+  const view = (views[r] || views.resumen)();
+  if (!view) { location.hash = "#/resumen"; return; }
+
+  const isRoot = !!ROOTS[r] && !id;
+  $("#topbar").innerHTML = isRoot
+    ? `<div class="title-wrap"><img class="logo" src="/img/logo.png" alt="Des Goises" width="116" height="18"><span class="sep"></span><h1>${esc(view.title)}</h1></div>
+       ${r !== "gestionar" ? `<a class="icon-btn" href="#/gestionar" aria-label="Gestionar muestras, campañas y opciones">${icon("sliders")}</a>` : ""}`
+    : `<button class="icon-btn" id="back" aria-label="Volver">${icon("left")}</button><h1>${esc(view.title)}</h1>${view.action || ""}`;
+  $("#back")?.addEventListener("click", () => (history.length > 1 ? history.back() : (location.hash = view.parent || "#/resumen")));
+  document.title = `${view.title} · Des Goises`;
+
+  const tab = { resumen: "resumen", productos: "productos", producto: "productos", colecciones: "colecciones", coleccion: "colecciones",
+    campana: "colecciones", movimientos: "movimientos", gasto: "movimientos" }[r];
+  $$(".tab[data-tab]").forEach((t) => (t.dataset.tab === tab ? t.setAttribute("aria-current", "page") : t.removeAttribute("aria-current")));
+
+  main.innerHTML = view.html;
+  view.bind?.();
+  $("#topbar [data-action]")?.addEventListener("click", view.onAction);
+  window.scrollTo(0, keepScroll ? y : 0);
+}
+
+window.addEventListener("hashchange", () => render(false));
+$("#addBtn").addEventListener("click", () => openCarga(ctx));
+
+/* ================= Piezas comunes ================= */
+
+const ESTADO_TANDA = {
+  cerrado: ["ok", "Cerrado"], incompleto: ["warn", "Incompleto"], estimado: ["info", "Estimado"], al_dia: ["", "Abierto"],
+};
+const estadoBadge = (e) => `<span class="badge ${ESTADO_TANDA[e][0]}">${ESTADO_TANDA[e][1]}</span>`;
+const PAGO_BADGE = { pagado: "", parcial: '<span class="badge warn">Pago parcial</span>', pendiente: '<span class="badge warn">Pendiente</span>' };
+const PROD_ESTADOS = [["preparacion", "En preparación"], ["produccion", "En producción"], ["finalizada", "Finalizada"]];
+const ESTADO_CORTO = { preparacion: "Preparación", produccion: "Producción", finalizada: "Finalizada" };
+
+function thumb(p, size = "") {
+  return p?.foto_id
+    ? `<span class="thumb ${size}"><img src="${fileUrl(p.foto_id, true)}" alt="" loading="lazy"></span>`
+    : `<span class="thumb ${size}">${icon("shirt")}</span>`;
+}
+
+function gastoRow(g, { showCat = true } = {}) {
+  const I = S.I;
+  const p = pagoInfo(I, g);
+  const c = CAT[g.categoria];
+  const sub = [showCat && (c?.corto || c?.nombre || "Sin categoría"), g.descripcion && g.descripcion !== gastoTitulo(I, g) ? g.descripcion : null, fmtDate(g.fecha)]
+    .filter(Boolean).join(" · ");
+  return `<li><a class="row" href="#/gasto/${g.id}">
+    <span class="row-main"><span class="row-title">${esc(gastoTitulo(I, g))}</span><span class="row-sub">${esc(sub)}</span></span>
+    <span class="row-end"><b class="money">${money(g.monto, g.moneda)}</b>${faltaAsignar(g) ? '<span class="badge warn">Sin asignar</span>' : PAGO_BADGE[p.estado]}${g.estimado ? '<span class="badge info">Estimado</span>' : ""}</span>
+  </a></li>`;
+}
+const gastoList = (gs, opts) => gs.length
+  ? `<ul class="list">${gs.slice().sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id).map((g) => gastoRow(g, opts)).join("")}</ul>`
+  : `<div class="empty">Sin gastos todavía</div>`;
+
+const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
+const perUnit = (m, n, dec = true) => (n ? moneyM(M.scale(m, 1 / n), dec) : "—");
+const unitsTxt = (u) => (u.n == null ? "Sin cantidad" : `${fmtInt(u.n)} u.${u.estimada ? " estimadas" : ""}`);
+
+function fold({ title, total, extra = "", body, open = false }) {
+  return `<details class="fold" ${open ? "open" : ""}><summary>${icon("right", "chev")}
+    <span class="row-main"><span class="row-title">${title}</span></span>
+    <span class="row-end"><b class="money">${total}</b>${extra ? `<span class="row-sub">${extra}</span>` : ""}</span></summary>
+    <div class="fold-body">${body}</div></details>`;
+}
+
+async function patch(table, id, body, msg) {
+  await api(`${table}/${id}`, { method: "PATCH", body });
+  await reload();
+  if (msg) toast(msg);
+}
+
+function inPeriod(fecha, per) { return per.length === 4 ? fecha.startsWith(per) : monthKey(fecha) === per; }
+function periodNav(per, id = "per", withMode = true) {
+  const label = per.length === 4 ? `Año ${per}` : monthName(per);
+  return `<div class="card" style="padding:8px">
+    <div class="period"><button class="icon-btn" data-${id}="-1" aria-label="Anterior">${icon("left")}</button>
+      <span class="label" aria-live="polite">${label}</span>
+      <button class="icon-btn" data-${id}="1" aria-label="Siguiente">${icon("right")}</button></div>
+    ${withMode ? `<div class="seg" style="margin-top:8px"><button data-${id}-mode="mes" aria-pressed="${per.length !== 4}">Mes</button><button data-${id}-mode="anio" aria-pressed="${per.length === 4}">Año</button></div>` : ""}
+  </div>`;
+}
+function bindPeriod(get, set, id = "per") {
+  $$(`[data-${id}]`).forEach((b) => (b.onclick = () => {
+    const p = get(), d = Number(b.dataset[id]);
+    set(p.length === 4 ? String(Number(p) + d) : addMonths(p, d));
+  }));
+  $$(`[data-${id}-mode]`).forEach((b) => (b.onclick = () => {
+    const p = get();
+    set(b.dataset[`${id}Mode`] === "anio" ? p.slice(0, 4) : p.length === 4 ? (p === thisMonth().slice(0, 4) ? thisMonth() : `${p}-12`) : p);
+  }));
+}
+
+/* ================= Resumen ================= */
+
+function vResumen() {
+  const I = S.I, D = S.data, per = S.mes;
+  const gastos = D.gastos.filter((g) => inPeriod(g.fecha, per));
+  const total = tot(gastos);
+  const pagado = M.sum(D.pagos.filter((p) => inPeriod(p.fecha, per)).map((p) => M.of(I.gasto.get(p.gasto_id)?.moneda, p.monto)));
+  const pendiente = M.sum(D.gastos.map((g) => M.of(g.moneda, pagoInfo(I, g).pendiente)));
+
+  const porCat = [...CATEGORIAS, { key: null, nombre: "Sin categoría" }].map((c) => {
+    const gs = gastos.filter((g) => (g.categoria || null) === c.key);
+    return { c, total: tot(gs), n: gs.length };
+  }).filter((x) => x.n).sort((a, b) => M.get(b.total) - M.get(a.total));
+  // Equipamiento va aparte: una compra grande no es un gasto habitual del mes.
+  const equipo = porCat.find((x) => x.c.key === "equipamiento");
+  const habituales = porCat.filter((x) => x !== equipo);
+  const catRow = ({ c, total, n }) => `<li><a class="row" href="#/movimientos?cat=${c.key || "sin"}&per=${per}">
+          <span class="row-main"><span class="row-title">${esc(c.nombre)}</span><span class="row-sub">${plural(n, "gasto")}</span></span>
+          <span class="row-end"><b class="money">${moneyM(total)}</b></span>${icon("right", "chev")}</a></li>`;
+
+  const activas = D.tandas.filter((t) => !t.cerrada && t.estado !== "finalizada" && !I.producto.get(t.producto_id)?.archivado &&
+    (t.estado === "produccion" || (I.gastosDeTanda.get(t.id) || []).length));
+  const al = avisos(I);
+
+  return {
+    title: "Resumen",
+    html: `
+      ${periodNav(per)}
+      <section class="card" aria-label="Totales del período">
+        <div class="hero-label">Gastos registrados · ${per.length === 4 ? per : monthName(per)}</div>
+        <div class="hero-value money">${moneyM(total)}</div>
+        <div class="hero-sub">${plural(gastos.length, "gasto")}${equipo ? ` · incluye ${moneyM(equipo.total)} de equipamiento` : ""}</div>
+        <div class="stats">
+          <div class="stat"><span>Pagado en el período</span><b class="money">${moneyM(pagado)}</b></div>
+          <div class="stat"><span>Saldo pendiente (total)</span><b class="money">${moneyM(pendiente)}</b></div>
+        </div>
+      </section>
+
+      <h2 class="section-label">Para completar</h2>
+      <section class="card flush" aria-label="Avisos">
+        ${al.length ? `<ul class="list" id="avisos">${al.map((a, n) => `<li ${n >= 6 ? "hidden" : ""}><a class="row alert-row" href="${a.ruta}">
+          <span class="ico-box">${icon(a.tipo === "saldo" ? "wallet" : a.tipo === "duplicado" ? "file" : "alert", "sm")}</span>
+          <span class="row-main"><span class="row-title">${esc(a.texto)}${a.monto ? ` <b class="money">${moneyM(a.monto)}</b>` : ""}</span></span>${icon("right", "chev")}</a></li>`).join("")}</ul>
+          ${al.length > 6 ? `<button class="btn ghost block" id="more-av">Ver ${al.length - 6} más</button>` : ""}`
+          : `<div class="empty">${icon("check_circle", "lg")}Todo al día. No falta completar nada.</div>`}
+      </section>
+
+      <h2 class="section-label">Producciones activas</h2>
+      <section class="card flush">
+        ${activas.length ? `<ul class="list">${activas.map((t) => {
+          const p = I.producto.get(t.producto_id), tc = tandaCosts(I, t.id);
+          return `<li><a class="row" href="#/producto/${p.id}?tanda=${t.id}">${thumb(p)}
+            <span class="row-main"><span class="row-title">${esc(tandaLabel(I, t))}</span>
+            <span class="row-sub">${PROD_ESTADOS.find((e) => e[0] === t.estado)[1]} · ${unitsTxt(tc.unidades)}</span></span>
+            <span class="row-end">${estadoBadge(tc.estado)}</span></a></li>`;
+        }).join("")}</ul>` : `<div class="empty">No hay producciones en curso.</div>`}
+      </section>
+
+      <h2 class="section-label">Por categoría</h2>
+      <section class="card flush">
+        ${habituales.length ? `<ul class="list">${habituales.map(catRow).join("")}</ul>`
+          : `<div class="empty">Sin gastos en este período.<button class="btn sm" data-add>${icon("plus", "sm")} Añadir gasto</button></div>`}
+      </section>
+      ${equipo ? `<h2 class="section-label">Equipamiento (aparte)</h2><section class="card flush"><ul class="list">${catRow(equipo)}</ul></section>` : ""}
+      <p class="hint" style="margin:0 4px">Esta app registra gastos y costos. Para conocer caja, ganancias o stock hace falta registrar ventas y saldos.</p>`,
+    bind() {
+      bindPeriod(() => S.mes, (p) => { S.mes = p; render(); });
+      $("#more-av")?.addEventListener("click", (e) => { $$("#avisos li").forEach((li) => (li.hidden = false)); e.target.remove(); });
+      $("[data-add]")?.addEventListener("click", () => openCarga(ctx));
+    },
+  };
+}
+
+/* ================= Productos ================= */
+
+function vProductos(q) {
+  const I = S.I, D = S.data;
+  const col = q.get("col") || "";
+  const all = D.productos.filter((p) => !!p.archivado === S.verArchivados);
+  const lista = all.filter((p) => !col || String(p.coleccion_id || "sin") === col);
+  const cols = D.colecciones.filter((c) => !c.archivada && D.productos.some((p) => p.coleccion_id === c.id));
+  const nArch = D.productos.filter((p) => p.archivado).length;
+
+  return {
+    title: "Productos",
+    html: `
+      <div class="btn-row"><button class="btn" id="new-prod">${icon("plus")} Nuevo producto</button></div>
+      ${all.length > 5 ? `<div class="search">${icon("search")}<input class="input" id="p-q" type="search" placeholder="Buscar producto" aria-label="Buscar producto"></div>` : ""}
+      ${cols.length ? `<div class="chips scroll" role="group" aria-label="Filtrar por colección">
+        <a class="chip" href="#/productos" aria-pressed="${!col}">Todas</a>
+        ${cols.map((c) => `<a class="chip" href="#/productos?col=${c.id}" aria-pressed="${col === String(c.id)}">${esc(c.nombre)}</a>`).join("")}
+        <a class="chip" href="#/productos?col=sin" aria-pressed="${col === "sin"}">Sin colección</a></div>` : ""}
+      <section class="card flush">
+        ${lista.length ? `<ul class="list" id="p-list">${lista.map((p) => {
+          const r = productoResumen(I, p.id).actual;
+          const u = r?.unidades || { n: null };
+          const colName = I.coleccion.get(p.coleccion_id)?.nombre || "Sin colección";
+          const varias = (I.tandasDeProducto.get(p.id) || []).length > 1;
+          const prodTxt = M.isZero(r?.lineas.produccion.total || {}) ? "Producción pendiente" : `Producción ${perUnit(r.lineas.produccion.total, u.n, false)}/u`;
+          const metr = u.n
+            ? `${prodTxt} · Directo ${perUnit(r.directo, u.n, false)}/u`
+            : r && !M.isZero(r.directo) ? `Gastado ${moneyM(r.directo)} · falta cantidad` : "Sin gastos todavía";
+          return `<li data-name="${esc(p.nombre.toLowerCase())}"><a class="row" href="#/producto/${p.id}">${thumb(p, "lg")}
+            <span class="row-main"><span class="row-title">${esc(p.nombre)}</span>
+              <span class="row-sub">${esc(colName)} · ${unitsTxt(u)}${varias ? ` · ${esc(r.tanda.nombre)}` : ""}</span>
+              <span class="row-sub money wrap">${metr}</span></span>
+            <span class="row-end">${r ? estadoBadge(r.estado) : ""}</span></a></li>`;
+        }).join("")}</ul>` : `<div class="empty">${S.verArchivados ? "No hay productos archivados." : "Todavía no hay productos. Creá uno acá o mientras cargás un gasto."}</div>`}
+      </section>
+      ${nArch || S.verArchivados ? `<button class="btn ghost" id="arch">${S.verArchivados ? "Ver productos activos" : `Ver archivados (${nArch})`}</button>` : ""}`,
+    bind() {
+      $("#new-prod").onclick = () => nuevoProducto();
+      $("#arch")?.addEventListener("click", () => { S.verArchivados = !S.verArchivados; render(); });
+      const pq = $("#p-q");
+      if (pq) pq.oninput = () => $$("#p-list > li").forEach((li) => (li.hidden = !li.dataset.name.includes(pq.value.trim().toLowerCase())));
+    },
+  };
+}
+
+function coleccionSelect(selected, id = "f-col") {
+  const cols = S.data.colecciones.filter((c) => !c.archivada || c.id === selected);
+  return `<div class="field"><label for="${id}">Colección</label><select id="${id}" class="select">
+    <option value="">Sin colección</option>${cols.map((c) => `<option value="${c.id}" ${c.id === selected ? "selected" : ""}>${esc(c.nombre)}</option>`).join("")}
+  </select></div>`;
+}
+
+async function nuevoProducto() {
+  const r = await promptSheet({ title: "Nuevo producto", label: "Nombre del producto", ok: "Crear producto", extra: coleccionSelect(null) });
+  if (!r) return;
+  try {
+    const row = await api("productos", { method: "POST", body: { nombre: r.value, coleccion_id: r.form.querySelector("#f-col").value || null } });
+    await reload();
+    location.hash = `#/producto/${row.id}`;
+  } catch (err) { toast(err.message, true); }
+}
+
+function vProducto(id, q) {
+  const I = S.I, D = S.data;
+  const p = I.producto.get(id);
+  if (!p) return null;
+  const { tandas, actual } = productoResumen(I, id);
+  const sel = tandas.find((c) => c.tanda.id === Number(q.get("tanda"))) || actual || tandas[0];
+  const t = sel.tanda, u = sel.unidades, L = sel.lineas;
+  const cob = D.ajustes.cobertura;
+  const linked = I.muestrasDeProducto.get(id) || [];
+  const hist = D.historial.filter((h) => h.tanda_id === t.id);
+  const conceptosProd = D.opciones.filter((o) => o.tipo === "concepto_prod" && !o.archivada).map((o) => o.nombre);
+  const extraConceptos = [...new Set(L.produccion.gastos.map((g) => g.concepto || "Sin concepto"))].filter((c) => !conceptosProd.includes(c));
+  const cerrada = !!t.cerrada;
+
+  const levelVal = (m) => (u.n ? moneyM(M.scale(m, 1 / u.n), true) : "—");
+  const refVal = u.n && cob?.porUnidad != null ? moneyM(M.add(M.scale(sel.directo, 1 / u.n), { ARS: cob.porUnidad }), true) : null;
+
+  const sinProduccion = !L.produccion.gastos.length;
+  const lineFold = (title, m, gs, extra, vacio) => fold({
+    title, total: !gs.length && vacio ? vacio : moneyM(m), extra: u.n && !M.isZero(m) ? `${perUnit(m, u.n)} por unidad` : extra || "",
+    body: gs.length ? `<ul class="list">${gs.map((g) => gastoRow(g)).join("")}</ul>` : `<p class="hint" style="margin:0">Sin gastos asignados.</p>`,
+  });
+
+  return {
+    title: p.nombre,
+    parent: "#/productos",
+    action: `<button class="icon-btn" data-action aria-label="Editar producto">${icon("pencil")}</button>`,
+    onAction: () => editarProducto(p),
+    html: `
+      <div class="product-photo ${p.foto_id ? "" : "empty-photo"}">
+        ${p.foto_id ? `<img src="${fileUrl(p.foto_id)}" alt="Foto de ${esc(p.nombre)}">` : `<div class="empty" style="padding:0">${icon("image", "lg")}<span class="small">Sin foto</span></div>`}
+        <button class="btn secondary sm photo-btn" id="photo">${icon("camera", "sm")} ${p.foto_id ? "Cambiar foto" : "Agregar foto"}</button>
+        <input type="file" id="photo-in" accept="image/*" hidden>
+      </div>
+      <div>
+        <div class="row-sub" style="font-size:15px">${esc(I.coleccion.get(p.coleccion_id)?.nombre || "Sin colección")}${p.archivado ? " · Archivado" : ""}</div>
+      </div>
+
+      <div class="chips scroll" role="tablist" aria-label="Tandas">
+        ${tandas.map((c) => `<a class="chip" role="tab" href="#/producto/${id}?tanda=${c.tanda.id}" aria-pressed="${c.tanda.id === t.id}" aria-selected="${c.tanda.id === t.id}">${c.tanda.cerrada ? icon("lock", "sm") : ""}${esc(c.tanda.nombre)}</a>`).join("")}
+        <button class="chip add" id="new-tanda">${icon("plus", "sm")} Nueva tanda</button>
+      </div>
+
+      <section class="card stack">
+        <div class="card-head" style="margin:0"><h2 class="h">${esc(t.nombre)}</h2>${estadoBadge(sel.estado)}</div>
+        <div class="seg" role="group" aria-label="Estado de la producción">
+          ${PROD_ESTADOS.map(([k, txt]) => `<button data-estado="${k}" aria-pressed="${t.estado === k}" aria-label="${txt}" ${cerrada ? "disabled" : ""}>${ESTADO_CORTO[k]}</button>`).join("")}
+        </div>
+        <div class="qty-row">
+          <div class="field"><label for="q-est">Cantidad estimada</label>
+            <input id="q-est" class="input money" inputmode="numeric" value="${t.cant_estimada ?? ""}" placeholder="—" ${cerrada ? "disabled" : ""}></div>
+          <div class="field"><label for="q-fin">Cantidad final vendible</label>
+            <input id="q-fin" class="input money" inputmode="numeric" value="${t.cant_final ?? ""}" placeholder="—" ${cerrada ? "disabled" : ""}></div>
+        </div>
+        ${t.cant_final != null && t.cant_estimada != null && t.cant_final !== t.cant_estimada ? `<p class="hint" style="margin:-8px 0 0">Se estimaron ${fmtInt(t.cant_estimada)} y quedaron ${fmtInt(t.cant_final)} (${t.cant_final > t.cant_estimada ? "+" : ""}${fmtInt(t.cant_final - t.cant_estimada)}).</p>` : ""}
+        ${sel.avisos.map((a) => `<div class="note warn">${icon("alert", "sm")}<span>${esc(a)}</span></div>`).join("")}
+
+        <div class="levels" aria-label="Costo por unidad">
+          <div class="level main"><span class="l-name">Costo de producción por unidad</span><span class="l-val money">${sinProduccion ? "Pendiente" : levelVal(L.produccion.total)}</span></div>
+          <div class="level"><span class="l-name">Con desarrollo, campaña y publicidad</span><span class="l-val money">${levelVal(sel.directo)}</span></div>
+          <div class="level"><span class="l-name">Costo de referencia para evaluar precio${cob?.porUnidad != null ? `<span class="sub xs" style="display:block">Incluye ${money(cob.porUnidad, "ARS", true)} de gastos generales (simulación ${esc(monthName(cob.mes))}, ${fmtInt(cob.ventas)} ventas)</span>` : ""}</span>
+            <span class="l-val money">${refVal || (cob ? "—" : `<a class="btn ghost sm" href="#/simular">Simular</a>`)}</span></div>
+        </div>
+        <p class="hint" style="margin:-4px 0 0">${u.n ? `Por unidad sobre ${unitsTxt(u)}.` : ""} No incluye comisiones, envíos, packaging ni otros gastos generales de la marca.</p>
+      </section>
+
+      <h2 class="section-label">De dónde sale</h2>
+      <section class="card flush">
+        ${lineFold("Producción", L.produccion.total, L.produccion.gastos, "", "Pendiente")}
+        ${L.desarrollo.aplica
+          ? lineFold("Muestras y moldería", L.desarrollo.total, L.desarrollo.gastos)
+          : fold({ title: "Muestras y moldería", total: "—", extra: "En Primera producción", body: `<p class="hint" style="margin:0">El desarrollo se cuenta una sola vez, en la primera tanda del producto, para no duplicarlo.</p>` })}
+        ${fold({
+          title: "Campaña asignada", total: moneyM(L.campana.total),
+          extra: u.n && !M.isZero(L.campana.total) ? `${perUnit(L.campana.total, u.n)} por unidad` : "",
+          body: L.campana.campanas.length ? `<ul class="list">${L.campana.campanas.map((c) => `<li><a class="row" href="#/campana/${c.campana.id}">
+              <span class="row-main"><span class="row-title">${esc(c.campana.nombre)}</span>
+              <span class="row-sub">Total campaña ${moneyM(c.info.total)} · ${c.info.totalUnidades ? fmtInt(c.info.totalUnidades) + " u. participantes" : "faltan cantidades"}</span></span>
+              <span class="row-end"><b class="money">${c.monto ? moneyM(c.monto) : "Pendiente"}</b>${c.info.estado === "estimado" ? '<span class="badge info">Estimado</span>' : c.info.estado === "falta_cantidad" ? '<span class="badge warn">Pendiente</span>' : ""}</span></a></li>`).join("")}</ul>`
+            : `<p class="hint" style="margin:0">No participa en campañas. Se agrega desde la ficha de la campaña.</p>`,
+        })}
+        ${lineFold("Publicidad asignada", L.publicidad.total, L.publicidad.gastos)}
+        <div class="row" style="font-weight:650"><span class="row-main">Total directo asignado</span>
+          <span class="row-end"><b class="money">${moneyM(sel.directo)}</b>${u.n ? `<span class="row-sub">${perUnit(sel.directo, u.n)} por unidad</span>` : ""}</span></div>
+      </section>
+      ${L.publicidad.gastos.length && u.n ? `<p class="hint" style="margin:0 4px">Publicidad asignada por unidad producida: ${perUnit(L.publicidad.total, u.n)}. No es el costo de conseguir una venta.</p>` : ""}
+
+      <h2 class="section-label">Conceptos de producción</h2>
+      <section class="card flush"><ul class="list">
+        ${[...conceptosProd, ...extraConceptos].map((c) => {
+          const gs = L.produccion.gastos.filter((g) => (g.concepto || "Sin concepto") === c);
+          const na = I.noAplica.has(`${t.id}|${c}`);
+          let end;
+          if (gs.length) end = `<b class="money">${moneyM(tot(gs))}</b>${gs.some((g) => g.estimado) ? '<span class="badge info">Estimado</span>' : '<span class="badge ok">Confirmado</span>'}`;
+          else if (na) end = `<span class="badge">No aplica</span>`;
+          else end = `<span class="badge warn">Pendiente</span>`;
+          return `<li><div class="row"><span class="row-main"><span class="row-title">${esc(c)}</span></span><span class="row-end">${end}</span>
+            ${!gs.length && !cerrada ? `<button class="btn ghost sm" data-na="${esc(c)}" data-on="${na ? "" : "1"}">${na ? "Deshacer" : "No aplica"}</button>` : ""}</div></li>`;
+        }).join("")}
+      </ul></section>
+
+      <div class="btn-row">
+        <button class="btn" id="add-g" ${cerrada ? "disabled" : ""}>${icon("plus")} Cargar gasto</button>
+        <button class="btn secondary" id="close-t">${icon(cerrada ? "unlock" : "lock")} ${cerrada ? "Reabrir tanda" : "Revisada y cerrada"}</button>
+      </div>
+      ${cerrada ? `<p class="hint" style="margin:0 4px">Tanda cerrada: sus cantidades y gastos no se modifican hasta reabrirla.</p>` : ""}
+
+      <h2 class="section-label">Muestras vinculadas</h2>
+      <section class="card flush">
+        ${linked.length ? `<ul class="list">${linked.map((m) => `<li><a class="row" href="#/muestra/${m.id}"><span class="ico-box">${icon("scissors")}</span>
+          <span class="row-main"><span class="row-title">${esc(m.nombre)}</span></span><span class="row-end"><b class="money">${moneyM(tot((I.gastosDeMuestra.get(m.id) || [])))}</b></span>${icon("right", "chev")}</a></li>`).join("")}</ul>` : ""}
+        <button class="row add" id="link-m"><span class="ico-box">${icon("link")}</span><span class="row-main">Vincular una muestra</span></button>
+      </section>
+      <p class="hint" style="margin:0 4px">Vincular no duplica el gasto: es el mismo gasto visto desde la muestra y desde el producto.</p>
+
+      ${hist.length ? `<details class="card" style="padding:0"><summary class="row" style="border:0">${icon("history")}<span class="row-main">Historial de cambios (${hist.length})</span>${icon("down", "chev")}</summary>
+        <ul class="list" style="padding:0 16px 8px">${hist.map((h) => `<li class="row" style="padding:8px 0;min-height:0"><span class="row-main"><span class="row-sub">${esc(fmtDate(h.fecha.slice(0, 10)))}</span><span class="small" style="white-space:normal">${esc(histText(h))}</span></span></li>`).join("")}</ul></details>` : ""}
+
+      <button class="btn ghost" id="edit-t">Editar tanda</button>`,
+    bind() {
+      $("#photo").onclick = () => $("#photo-in").click();
+      $("#photo-in").onchange = async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        await busy($("#photo"), async () => {
+          const up = await uploadFile(f, { photo: true });
+          await patch("productos", id, { foto_id: up.id }, "Foto guardada");
+        }).catch(() => {});
+      };
+      $$("[data-estado]").forEach((b) => (b.onclick = () => patch("tandas", t.id, { estado: b.dataset.estado }).catch((e) => toast(e.message, true))));
+      const qty = (inp, col) => {
+        inp.oninput = () => (inp.value = inp.value.replace(/\D/g, ""));
+        inp.onchange = () => {
+          const v = inp.value === "" ? null : Number(inp.value);
+          if (v === 0) { toast("La cantidad no puede ser cero. Dejala vacía si no la sabés.", true); inp.value = t[col] ?? ""; return; }
+          patch("tandas", t.id, { [col]: v }, "Cantidad guardada · costos recalculados").catch((e) => toast(e.message, true));
+        };
+      };
+      qty($("#q-est"), "cant_estimada");
+      qty($("#q-fin"), "cant_final");
+      $$("[data-na]").forEach((b) => (b.onclick = () => busy(b, async () => {
+        await api("tanda_conceptos", { method: "PUT", body: { tanda_id: t.id, concepto: b.dataset.na, estado: b.dataset.on ? "no_aplica" : null } });
+        await reload();
+      }).catch(() => {})));
+      $("#add-g").onclick = () => openCarga(ctx, null, { categoria: "produccion", producto_id: id, tanda_id: t.id });
+      $("#close-t").onclick = async () => {
+        if (cerrada) return patch("tandas", t.id, { cerrada: 0 }, "Tanda reabierta").catch((e) => toast(e.message, true));
+        const faltas = [
+          ...sel.conceptosPendientes.map((c) => `${c}: pendiente`),
+          ...(u.n == null ? ["Falta la cantidad"] : u.estimada ? ["La cantidad final no está confirmada"] : []),
+          ...sel.lineas.campana.campanas.filter((c) => c.info.estado !== "final").map((c) => `Reparto de ${c.campana.nombre} sin confirmar`),
+        ];
+        const ok = await confirmSheet({
+          title: "Cerrar tanda",
+          text: faltas.length
+            ? `<p style="margin-top:0">Antes de dar el cálculo por terminado, revisá:</p><ul>${faltas.map((f) => `<li>${esc(f)}</li>`).join("")}</ul><p>¿Cerrar igual? Se puede reabrir después.</p>`
+            : "Está todo cargado. Al cerrarla queda marcada como revisada. Se puede reabrir después.",
+          ok: "Cerrar tanda",
+        });
+        if (ok) patch("tandas", t.id, { cerrada: 1, ...(t.estado !== "finalizada" ? { estado: "finalizada" } : {}) }, "Tanda cerrada").catch((e) => toast(e.message, true));
+      };
+      $("#new-tanda").onclick = async () => {
+        const r = await promptSheet({ title: "Nueva tanda", label: "Nombre", value: `Restock ${tandas.length}`, ok: "Crear tanda", extra: coleccionSelect(p.coleccion_id) });
+        if (!r) return;
+        try {
+          const row = await api("tandas", { method: "POST", body: { producto_id: id, nombre: r.value, coleccion_id: r.form.querySelector("#f-col").value || null } });
+          await reload();
+          location.hash = `#/producto/${id}?tanda=${row.id}`;
+        } catch (err) { toast(err.message, true); }
+      };
+      $("#edit-t").onclick = () => editarTanda(t, tandas.length);
+      $("#link-m").onclick = () => vincularMuestra(id);
+    },
+  };
+}
+
+const CAMPOS = { monto: "Importe", cant_estimada: "Cantidad estimada", cant_final: "Cantidad final", estado: "Estado", cerrada: "Cerrada",
+  categoria: "Categoría", tanda_id: "Tanda", concepto: "Concepto", descripcion: "Descripción", fecha: "Fecha", nombre: "Nombre", estimado: "Estimado" };
+function histText(h) {
+  let d; try { d = JSON.parse(h.detalle); } catch { return h.detalle; }
+  const g = h.entidad === "gastos" ? S.I.gasto.get(h.entidad_id) : null;
+  const pre = h.entidad === "gastos" ? `Gasto ${g ? gastoTitulo(S.I, g) : "#" + h.entidad_id}: ` : "";
+  if (d.borrado) return `${pre}borrado (${money(d.borrado[1])})`;
+  return pre + Object.entries(d).filter(([k]) => k !== "actualizado").map(([k, [a, b]]) => {
+    const f = (v) => (v == null ? "vacío" : k === "monto" ? money(v) : k === "cerrada" || k === "estimado" ? (v ? "sí" : "no") : v);
+    return `${CAMPOS[k] || k}: ${f(a)} → ${f(b)}`;
+  }).join(" · ");
+}
+
+function editarProducto(p) {
+  sheet({
+    title: "Editar producto",
+    render: ({ body, close }) => {
+      body.innerHTML = `<form class="stack">
+        <div class="field"><label for="e-n">Nombre</label><input id="e-n" class="input" value="${esc(p.nombre)}" required></div>
+        ${coleccionSelect(p.coleccion_id)}
+        <p class="hint" style="margin:-8px 0 0">Cambia la colección del producto. Cada tanda puede tener su propia colección desde “Editar tanda”.</p>
+        <button class="btn block">Guardar</button>
+        <div class="btn-row"><button type="button" class="btn secondary" id="e-arch">${icon("archive", "sm")} ${p.archivado ? "Desarchivar" : "Archivar"}</button>
+        <button type="button" class="btn danger" id="e-del">${icon("trash", "sm")} Borrar</button></div>
+      </form>`;
+      const f = $("form", body);
+      f.onsubmit = (e) => { e.preventDefault(); busy($("button", f), async () => { await patch("productos", p.id, { nombre: $("#e-n", body).value, coleccion_id: $("#f-col", body).value || null }, "Producto actualizado"); close(); }).catch(() => {}); };
+      $("#e-arch", body).onclick = () => busy($("#e-arch", body), async () => { await patch("productos", p.id, { archivado: p.archivado ? 0 : 1 }, p.archivado ? "Producto activo" : "Producto archivado"); close(); }).catch(() => {});
+      $("#e-del", body).onclick = async () => {
+        if (!(await confirmSheet({ title: "Borrar producto", text: `Se borra “${esc(p.nombre)}” y sus tandas. Solo se puede si no tiene gastos.`, ok: "Borrar", danger: true }))) return;
+        try { await api(`productos/${p.id}`, { method: "DELETE" }); close(); location.hash = "#/productos"; await reload(); toast("Producto borrado"); }
+        catch (err) { toast(err.message, true); }
+      };
+    },
+  });
+}
+
+function editarTanda(t, n) {
+  sheet({
+    title: "Editar tanda",
+    render: ({ body, close }) => {
+      body.innerHTML = `<form class="stack">
+        <div class="field"><label for="e-n">Nombre</label><input id="e-n" class="input" value="${esc(t.nombre)}" required></div>
+        ${coleccionSelect(tandaColeccionId(S.I, t))}
+        <p class="hint" style="margin:-8px 0 0">La colección principal de la tanda define en qué colección se suman sus costos.</p>
+        <button class="btn block">Guardar</button>
+        ${n > 1 ? `<button type="button" class="btn danger" id="e-del">${icon("trash", "sm")} Borrar tanda</button>` : ""}
+      </form>`;
+      const f = $("form", body);
+      f.onsubmit = (e) => { e.preventDefault(); busy($("button", f), async () => { await patch("tandas", t.id, { nombre: $("#e-n", body).value, coleccion_id: $("#f-col", body).value || null }, "Tanda actualizada"); close(); }).catch(() => {}); };
+      $("#e-del", body)?.addEventListener("click", async () => {
+        if (!(await confirmSheet({ title: "Borrar tanda", text: "Solo se puede si no tiene gastos.", ok: "Borrar", danger: true }))) return;
+        try { await api(`tandas/${t.id}`, { method: "DELETE" }); close(); location.hash = `#/producto/${t.producto_id}`; await reload(); toast("Tanda borrada"); }
+        catch (err) { toast(err.message, true); }
+      });
+    },
+  });
+}
+
+function vincularMuestra(productoId) {
+  const libres = S.data.muestras.filter((m) => !m.archivada && m.producto_id !== productoId);
+  sheet({
+    title: "Vincular muestra",
+    render: ({ body, close }) => {
+      body.innerHTML = `${libres.length ? `<div class="card flush"><ul class="list">${libres.map((m) => `<li><button class="row" data-m="${m.id}">
+        <span class="ico-box">${icon("scissors")}</span><span class="row-main"><span class="row-title">${esc(m.nombre)}</span>
+        <span class="row-sub">${m.producto_id ? `Hoy vinculada a ${esc(S.I.producto.get(m.producto_id)?.nombre)}` : "Sin vincular"} · ${moneyM(tot(S.I.gastosDeMuestra.get(m.id) || []))}</span></span></button></li>`).join("")}</ul></div>`
+        : `<div class="empty">No hay muestras para vincular.</div>`}`;
+      $$("[data-m]", body).forEach((b) => (b.onclick = () => busy(b, async () => { await patch("muestras", Number(b.dataset.m), { producto_id: productoId }, "Muestra vinculada"); close(); }).catch(() => {})));
+    },
+  });
+}
+
+/* ================= Colecciones ================= */
+
+function vColecciones() {
+  const I = S.I, D = S.data;
+  const cols = D.colecciones.filter((c) => !!c.archivada === S.verArchivados);
+  const nArch = D.colecciones.filter((c) => c.archivada).length;
+  return {
+    title: "Colecciones",
+    html: `
+      <div class="btn-row"><button class="btn" id="new-col">${icon("plus")} Nueva colección</button></div>
+      <section class="card flush">
+        ${cols.length ? `<ul class="list">${cols.map((c) => {
+          const cc = coleccionCosts(I, c.id);
+          return `<li><a class="row" href="#/coleccion/${c.id}"><span class="ico-box">${icon("layers")}</span>
+            <span class="row-main"><span class="row-title">${esc(c.nombre)}</span>
+            <span class="row-sub">${plural(cc.productos.length, "producto")} · ${plural(cc.campanas.length, "campaña")}${M.isZero(cc.pendiente) ? "" : ` · pendiente ${moneyM(cc.pendiente)}`}</span></span>
+            <span class="row-end"><b class="money">${moneyM(cc.total)}</b><span class="row-sub">directo</span></span></a></li>`;
+        }).join("")}</ul>` : `<div class="empty">${S.verArchivados ? "No hay colecciones archivadas." : "Todavía no hay colecciones."}</div>`}
+      </section>
+      ${nArch || S.verArchivados ? `<button class="btn ghost" id="arch">${S.verArchivados ? "Ver colecciones activas" : `Ver archivadas (${nArch})`}</button>` : ""}
+      <h2 class="section-label">Campañas de contenido</h2>
+      <section class="card flush">${campanasList(D.campanas.filter((c) => !c.archivada))}
+        <button class="row add" id="new-camp"><span class="ico-box">${icon("plus")}</span><span class="row-main">Nueva campaña</span></button></section>`,
+    bind() {
+      $("#new-col").onclick = async () => {
+        const r = await promptSheet({ title: "Nueva colección", label: "Nombre de la colección", ok: "Crear" });
+        if (!r) return;
+        try { const row = await api("colecciones", { method: "POST", body: { nombre: r.value } }); await reload(); location.hash = `#/coleccion/${row.id}`; }
+        catch (err) { toast(err.message, true); }
+      };
+      $("#arch")?.addEventListener("click", () => { S.verArchivados = !S.verArchivados; render(); });
+      $("#new-camp").onclick = () => nuevaCampana();
+    },
+  };
+}
+
+function campanasList(cs) {
+  if (!cs.length) return "";
+  return `<ul class="list">${cs.map((c) => {
+    const info = campaignInfo(S.I, c.id);
+    const badge = { sin_productos: '<span class="badge warn">Sin productos</span>', falta_cantidad: '<span class="badge warn">Reparto pendiente</span>', estimado: '<span class="badge info">Estimado</span>', final: '<span class="badge ok">Final</span>' }[info.estado];
+    return `<li><a class="row" href="#/campana/${c.id}"><span class="ico-box">${icon("camera")}</span>
+      <span class="row-main"><span class="row-title">${esc(c.nombre)}</span><span class="row-sub">${esc(S.I.coleccion.get(c.coleccion_id)?.nombre || "Sin colección")} · ${plural(info.parts.length, "producto")}</span></span>
+      <span class="row-end"><b class="money">${moneyM(info.total)}</b>${badge}</span></a></li>`;
+  }).join("")}</ul>`;
+}
+
+async function nuevaCampana(colId = null) {
+  const r = await promptSheet({ title: "Nueva campaña", label: "Nombre de la campaña", ok: "Crear", extra: coleccionSelect(colId) });
+  if (!r) return;
+  try {
+    const row = await api("campanas", { method: "POST", body: { nombre: r.value, coleccion_id: r.form.querySelector("#f-col").value || null } });
+    await reload();
+    location.hash = `#/campana/${row.id}`;
+  } catch (err) { toast(err.message, true); }
+}
+
+function vColeccion(id) {
+  const I = S.I;
+  const c = I.coleccion.get(id);
+  if (!c) return null;
+  const cc = coleccionCosts(I, id);
+  const L = cc.lineas;
+  const lf = (title, l, extra = "") => fold({ title, total: moneyM(l.total), extra, body: l.gastos.length ? `<ul class="list">${l.gastos.map((g) => gastoRow(g)).join("")}</ul>` : `<p class="hint" style="margin:0">Sin gastos.</p>` });
+  return {
+    title: c.nombre,
+    parent: "#/colecciones",
+    action: `<button class="icon-btn" data-action aria-label="Editar colección">${icon("pencil")}</button>`,
+    onAction: () => editarSimple("colecciones", c, "colección"),
+    html: `
+      <section class="card">
+        <div class="hero-label">Total directo de la colección</div>
+        <div class="hero-value money">${moneyM(cc.total)}</div>
+        <div class="stats"><div class="stat"><span>Pagado</span><b class="money">${moneyM(cc.pagado)}</b></div>
+          <div class="stat"><span>Pendiente</span><b class="money">${moneyM(cc.pendiente)}</b></div></div>
+      </section>
+      <section class="card flush">
+        ${lf("Producción", L.produccion)}
+        ${lf("Desarrollo vinculado", L.desarrollo, "muestras y moldería")}
+        ${lf("Campañas de contenido", L.campana)}
+        ${lf("Publicidad de sus productos", L.publicidad)}
+      </section>
+      <p class="hint" style="margin:0 4px">Cada gasto se suma una sola vez. No incluye gastos generales de la marca.</p>
+
+      <h2 class="section-label">Productos y tandas</h2>
+      <section class="card flush">
+        ${cc.tandas.length ? `<ul class="list">${cc.tandas.map((t) => {
+          const p = I.producto.get(t.producto_id), tc = tandaCosts(I, t.id);
+          return `<li><a class="row" href="#/producto/${p.id}?tanda=${t.id}">${thumb(p)}
+            <span class="row-main"><span class="row-title">${esc(tandaLabel(I, t))}</span><span class="row-sub money">${unitsTxt(tc.unidades)} · producción ${moneyM(tc.lineas.produccion.total)}</span></span>
+            <span class="row-end"><b class="money">${moneyM(tc.directo)}</b>${estadoBadge(tc.estado)}</span></a></li>`;
+        }).join("")}</ul>` : `<div class="empty">Sin productos. Asigná la colección desde la ficha de cada producto.</div>`}
+      </section>
+
+      <h2 class="section-label">Campañas</h2>
+      <section class="card flush">${campanasList(cc.campanas)}
+        <button class="row add" id="new-camp"><span class="ico-box">${icon("plus")}</span><span class="row-main">Nueva campaña en esta colección</span></button></section>`,
+    bind() { $("#new-camp").onclick = () => nuevaCampana(id); },
+  };
+}
+
+function editarSimple(table, row, nombre) {
+  const archKey = table === "productos" ? "archivado" : "archivada";
+  const hasCol = table === "campanas";
+  sheet({
+    title: `Editar ${nombre}`,
+    render: ({ body, close }) => {
+      body.innerHTML = `<form class="stack">
+        <div class="field"><label for="e-n">Nombre</label><input id="e-n" class="input" value="${esc(row.nombre)}" required></div>
+        ${hasCol ? coleccionSelect(row.coleccion_id) : ""}
+        <button class="btn block">Guardar</button>
+        <div class="btn-row"><button type="button" class="btn secondary" id="e-arch">${icon("archive", "sm")} ${row[archKey] ? "Desarchivar" : "Archivar"}</button>
+        <button type="button" class="btn danger" id="e-del">${icon("trash", "sm")} Borrar</button></div>
+        <p class="hint" style="margin:0">Archivar lo saca de las listas de carga pero conserva sus gastos.</p>
+      </form>`;
+      const f = $("form", body);
+      f.onsubmit = (e) => {
+        e.preventDefault();
+        const b = { nombre: $("#e-n", body).value };
+        if (hasCol) b.coleccion_id = $("#f-col", body).value || null;
+        busy($("button", f), async () => { await patch(table, row.id, b, "Guardado"); close(); }).catch(() => {});
+      };
+      $("#e-arch", body).onclick = () => busy($("#e-arch", body), async () => { await patch(table, row.id, { [archKey]: row[archKey] ? 0 : 1 }, row[archKey] ? "Activo de nuevo" : "Archivado"); close(); }).catch(() => {});
+      $("#e-del", body).onclick = async () => {
+        if (!(await confirmSheet({ title: `Borrar ${nombre}`, text: `Se borra “${esc(row.nombre)}”. Si tiene gastos, no se puede: archivalo.`, ok: "Borrar", danger: true }))) return;
+        try { await api(`${table}/${row.id}`, { method: "DELETE" }); close(); history.back(); await reload(); toast("Borrado"); }
+        catch (err) { toast(err.message, true); }
+      };
+    },
+  });
+}
+
+/* ================= Campaña ================= */
+
+function vCampana(id) {
+  const I = S.I;
+  const c = I.campana.get(id);
+  if (!c) return null;
+  const info = campaignInfo(I, id);
+  const estadoTxt = {
+    sin_productos: ["warn", "Sin productos participantes", "Elegí los productos que participaron para repartir el gasto."],
+    falta_cantidad: ["warn", "Reparto pendiente", `Falta la cantidad de: ${info.faltan.map((p) => tandaLabel(I, p.tanda)).join(", ")}.`],
+    estimado: ["info", "Reparto estimado", "Usa cantidades o importes estimados. Se recalcula solo cuando cargues los finales."],
+    final: ["ok", "Reparto final", "Con cantidades finales."],
+  }[info.estado];
+  return {
+    title: c.nombre,
+    parent: "#/colecciones",
+    action: `<button class="icon-btn" data-action aria-label="Editar campaña">${icon("pencil")}</button>`,
+    onAction: () => editarSimple("campanas", c, "campaña"),
+    html: `
+      <section class="card">
+        <div class="hero-label">Gasto de la campaña${c.coleccion_id ? ` · ${esc(I.coleccion.get(c.coleccion_id)?.nombre)}` : ""}</div>
+        <div class="hero-value money">${moneyM(info.total)}</div>
+        <div style="margin-top:8px"><span class="badge ${estadoTxt[0]}">${estadoTxt[1]}</span></div>
+        <p class="hint" style="margin:8px 0 0">${esc(estadoTxt[2])}</p>
+      </section>
+
+      <h2 class="section-label">Reparto por unidades</h2>
+      <section class="card">
+        ${info.parts.length ? `<table class="cost-table"><thead><tr><th>Producto</th><th>Unid.</th><th>Asignado</th><th>Por u.</th></tr></thead><tbody>
+          ${info.parts.map((p) => {
+            const a = info.asignado.get(p.tanda.id);
+            return `<tr><td><a href="#/producto/${p.tanda.producto_id}?tanda=${p.tanda.id}">${esc(tandaLabel(I, p.tanda))}</a></td>
+              <td class="money">${p.n == null ? '<span class="badge warn">Falta</span>' : fmtInt(p.n) + (p.estimada ? '<span class="sub">est.</span>' : "")}</td>
+              <td class="money">${a ? moneyM(a) : "—"}</td><td class="money">${a && p.n ? perUnit(a, p.n) : "—"}</td></tr>`;
+          }).join("")}
+          <tr class="total"><td>Total</td><td class="money">${info.totalUnidades ? fmtInt(info.totalUnidades) : "—"}</td><td class="money">${info.asignado.size ? moneyM(M.sum([...info.asignado.values()])) : "—"}</td><td></td></tr>
+        </tbody></table>
+        <p class="hint" style="margin:12px 0 0">Cada unidad participante absorbe la misma parte: gasto × unidades del producto ÷ unidades totales. La campaña se cuenta una sola vez en la colección.</p>`
+        : `<div class="empty" style="padding:8px">Todavía no hay productos participantes.</div>`}
+        <button class="btn secondary block" id="parts" style="margin-top:12px">${icon("shirt", "sm")} Elegir productos participantes</button>
+      </section>
+
+      <h2 class="section-label">Gastos de la campaña</h2>
+      <section class="card flush">${gastoList(info.gastos, { showCat: false })}</section>
+      <button class="btn" id="add-g">${icon("plus")} Cargar gasto a esta campaña</button>`,
+    bind() {
+      $("#parts").onclick = () => elegirParticipantes(c, info);
+      $("#add-g").onclick = () => openCarga(ctx, null, { categoria: "campanas", campana_id: id });
+    },
+  };
+}
+
+function elegirParticipantes(c, info) {
+  const I = S.I;
+  const sel = new Set(info.parts.map((p) => p.tanda.id));
+  const prods = S.data.productos.filter((p) => !p.archivado).sort((a, b) =>
+    (a.coleccion_id === c.coleccion_id ? -1 : 0) - (b.coleccion_id === c.coleccion_id ? -1 : 0) || a.nombre.localeCompare(b.nombre));
+  sheet({
+    title: "Productos participantes",
+    foot: true,
+    render: ({ body, foot, close }) => {
+      body.innerHTML = prods.length ? `<p class="hint" style="margin:0">Marcá cada producto (y su tanda) que aparece en la campaña. El gasto se reparte por sus unidades.</p>
+        <div class="card flush"><ul class="list">${prods.flatMap((p) => (I.tandasDeProducto.get(p.id) || []).map((t) => {
+          const u = unidades(t);
+          return `<li><label class="row"><input type="checkbox" value="${t.id}" ${sel.has(t.id) ? "checked" : ""} style="width:22px;height:22px">
+            ${thumb(p)}<span class="row-main"><span class="row-title">${esc(tandaLabel(I, t))}</span>
+            <span class="row-sub">${esc(I.coleccion.get(tandaColeccionId(I, t))?.nombre || "Sin colección")} · ${unitsTxt(u)}</span></span></label></li>`;
+        })).join("")}</ul></div>` : `<div class="empty">Primero creá productos.</div>`;
+      foot.innerHTML = `<button class="btn block">Guardar y recalcular</button>`;
+      $("button", foot).onclick = (e) => busy(e.currentTarget, async () => {
+        const ids = $$("input[type=checkbox]:checked", body).map((x) => Number(x.value));
+        await api(`campanas/${c.id}/tandas`, { method: "PUT", body: { tanda_ids: ids } });
+        await reload();
+        toast("Reparto recalculado");
+        close();
+      }).catch(() => {});
+    },
+  });
+}
+
+/* ================= Muestra ================= */
+
+function vMuestra(id) {
+  const I = S.I;
+  const m = I.muestra.get(id);
+  if (!m) return null;
+  const gs = I.gastosDeMuestra.get(id) || [];
+  const prod = m.producto_id ? I.producto.get(m.producto_id) : null;
+  return {
+    title: m.nombre,
+    parent: "#/gestionar/muestras",
+    action: `<button class="icon-btn" data-action aria-label="Editar muestra">${icon("pencil")}</button>`,
+    onAction: () => editarSimple("muestras", m, "muestra"),
+    html: `
+      <section class="card"><div class="hero-label">Total acumulado</div><div class="hero-value money">${moneyM(tot(gs))}</div>
+        <div class="hero-sub">${plural(gs.length, "gasto")}</div></section>
+      <section class="card flush">
+        <button class="row" id="link">${prod ? thumb(prod) : `<span class="ico-box">${icon("link")}</span>`}
+          <span class="row-main"><span class="row-title">${prod ? esc(prod.nombre) : "Vincular a un producto"}</span>
+          <span class="row-sub">${prod ? "Producto vinculado · tocá para cambiar" : "Cuando llegue a producción, su costo suma al desarrollo del producto"}</span></span>${icon("right", "chev")}</button>
+      </section>
+      ${!prod ? `<p class="hint" style="margin:0 4px">Si no llega a producirse, sigue visible como desarrollo de la marca.</p>` : ""}
+      <h2 class="section-label">Gastos</h2>
+      <section class="card flush">${gastoList(gs, { showCat: false })}</section>
+      <button class="btn" id="add-g">${icon("plus")} Cargar gasto a esta muestra</button>`,
+    bind() {
+      $("#add-g").onclick = () => openCarga(ctx, null, { categoria: "muestras", muestra_id: id });
+      $("#link").onclick = () => sheet({
+        title: "Vincular a producto",
+        render: ({ body, close }) => {
+          const ps = S.data.productos.filter((p) => !p.archivado);
+          body.innerHTML = `<div class="card flush"><ul class="list">
+            <li><button class="row" data-p=""><span class="ico-box">${icon("x")}</span><span class="row-main">Sin vincular</span></button></li>
+            ${ps.map((p) => `<li><button class="row" data-p="${p.id}">${thumb(p)}<span class="row-main"><span class="row-title">${esc(p.nombre)}</span></span>${p.id === m.producto_id ? icon("check") : ""}</button></li>`).join("")}
+          </ul></div>`;
+          $$("[data-p]", body).forEach((b) => (b.onclick = () => busy(b, async () => { await patch("muestras", id, { producto_id: b.dataset.p || null }, "Vinculación guardada"); close(); }).catch(() => {})));
+        },
+      });
+    },
+  };
+}
+
+/* ================= Suscripción / insumo ================= */
+
+function vOpcion(id) {
+  const I = S.I;
+  const o = I.opcion.get(id);
+  if (!o) return null;
+  const gs = I.gastosDeOpcion.get(id) || [];
+  const isPack = o.tipo === "packaging";
+  const unidadesTot = gs.reduce((s, g) => s + (g.cantidad || 0), 0);
+  return {
+    title: o.nombre,
+    parent: `#/gestionar/${o.tipo}`,
+    action: `<button class="icon-btn" data-action aria-label="Editar">${icon("pencil")}</button>`,
+    onAction: () => editarSimple("opciones", o, "opción"),
+    html: `
+      <section class="card"><div class="hero-label">Total pagado registrado</div><div class="hero-value money">${moneyM(tot(gs))}</div>
+        <div class="hero-sub">${plural(gs.length, "compra")}${isPack && unidadesTot ? ` · ${fmtInt(unidadesTot)} unidades compradas` : ""}</div></section>
+      ${isPack ? `<p class="hint" style="margin:0 4px">Se registra como gasto general de packaging. No se reparte entre productos ni se asume que se consumió todo.</p>` : `<p class="hint" style="margin:0 4px">Gasto general de la marca. No se asigna a productos.</p>`}
+      <section class="card flush">${gs.length ? `<ul class="list">${gs.map((g) => `<li><a class="row" href="#/gasto/${g.id}">
+        <span class="row-main"><span class="row-title">${esc(g.descripcion || fmtDateLong(g.fecha))}</span>
+        <span class="row-sub">${esc(fmtDate(g.fecha))}${g.cantidad ? ` · ${fmtInt(g.cantidad)} u. a ${money(g.monto / g.cantidad, g.moneda, true)} c/u` : ""}${g.cubre_meses > 1 ? ` · cubre ${g.cubre_meses} meses` : ""}</span></span>
+        <span class="row-end"><b class="money">${money(g.monto, g.moneda)}</b>${PAGO_BADGE[pagoInfo(I, g).estado]}</span></a></li>`).join("")}</ul>` : `<div class="empty">Sin gastos todavía</div>`}</section>
+      <button class="btn" id="add-g">${icon("plus")} Cargar gasto</button>`,
+    bind() { $("#add-g").onclick = () => openCarga(ctx, null, { categoria: isPack ? "packaging" : "suscripciones", opcion_id: id }); },
+  };
+}
+
+/* ================= Movimientos ================= */
+
+function gastoColeccion(I, g) {
+  if (g.tanda_id) return tandaColeccionId(I, I.tanda.get(g.tanda_id) || {});
+  if (g.campana_id) return I.campana.get(g.campana_id)?.coleccion_id ?? null;
+  if (g.producto_id) return I.producto.get(g.producto_id)?.coleccion_id ?? null;
+  if (g.muestra_id) return I.producto.get(I.muestra.get(g.muestra_id)?.producto_id)?.coleccion_id ?? null;
+  return null;
+}
+function gastoProducto(I, g) {
+  if (g.producto_id) return g.producto_id;
+  if (g.tanda_id) return I.tanda.get(g.tanda_id)?.producto_id;
+  if (g.muestra_id) return I.muestra.get(g.muestra_id)?.producto_id;
+  return null;
+}
+
+function vMovimientos(q) {
+  const I = S.I, D = S.data;
+  const f = { per: q.get("per") ?? thisMonth(), cat: q.get("cat") || "", prod: q.get("prod") || "", col: q.get("col") || "", estado: q.get("estado") || "", q: q.get("q") || "" };
+  const setF = (patch) => {
+    const n = { ...f, ...patch };
+    const qs = new URLSearchParams(Object.entries(n).filter(([, v]) => v !== ""));
+    if (n.per === "") qs.set("per", "todo");
+    history.replaceState(null, "", "#/movimientos?" + qs.toString());
+    render(true);
+  };
+  const per = f.per === "todo" ? "" : f.per;
+  const txt = f.q.toLowerCase();
+  const lista = D.gastos.filter((g) => {
+    if (per && !inPeriod(g.fecha, per)) return false;
+    if (f.cat && (g.categoria || "sin") !== f.cat) return false;
+    if (f.prod && String(gastoProducto(I, g)) !== f.prod) return false;
+    if (f.col && String(gastoColeccion(I, g)) !== f.col) return false;
+    if (f.estado === "sin_asignar" && !faltaAsignar(g)) return false;
+    if (f.estado === "estimado" && !g.estimado) return false;
+    if (["pagado", "parcial", "pendiente"].includes(f.estado) && pagoInfo(I, g).estado !== f.estado) return false;
+    if (txt && ![gastoTitulo(I, g), g.descripcion, g.proveedor, g.medio_pago, CAT[g.categoria]?.nombre].join(" ").toLowerCase().includes(txt)) return false;
+    return true;
+  });
+  const groups = new Map();
+  for (const g of lista) { if (!groups.has(g.fecha)) groups.set(g.fecha, []); groups.get(g.fecha).push(g); }
+  const opt = (v, t, cur) => `<option value="${v}" ${String(cur) === String(v) ? "selected" : ""}>${esc(t)}</option>`;
+  const nFil = [f.cat, f.prod, f.col, f.estado].filter(Boolean).length;
+
+  return {
+    title: "Movimientos",
+    html: `
+      ${per ? periodNav(per, "mp") : ""}
+      <div class="btn-row" style="align-items:center"><button class="btn ghost sm" id="all-time" style="flex:0 1 auto">${per ? "Ver todas las fechas" : "Ver por mes"}</button></div>
+      <div class="search">${icon("search")}<input class="input" id="m-q" type="search" placeholder="Buscar descripción, proveedor…" value="${esc(f.q)}" aria-label="Buscar"></div>
+      <details class="card" style="padding:0" ${nFil ? "open" : ""}><summary class="row" style="border:0">${icon("sliders")}<span class="row-main">Filtros${nFil ? ` (${nFil})` : ""}</span>${icon("down", "chev")}</summary>
+        <div class="grid-2" style="padding:0 16px 16px">
+          <div class="field"><label for="m-cat">Categoría</label><select id="m-cat" class="select">${opt("", "Todas", f.cat)}${CATEGORIAS.map((c) => opt(c.key, c.nombre, f.cat)).join("")}${opt("sin", "Sin categoría", f.cat)}</select></div>
+          <div class="field"><label for="m-est">Estado</label><select id="m-est" class="select">${[["", "Todos"], ["pagado", "Pagado"], ["parcial", "Pago parcial"], ["pendiente", "Pendiente"], ["sin_asignar", "Sin asignar"], ["estimado", "Estimado"]].map(([v, t]) => opt(v, t, f.estado)).join("")}</select></div>
+          <div class="field"><label for="m-prod">Producto</label><select id="m-prod" class="select">${opt("", "Todos", f.prod)}${D.productos.map((p) => opt(p.id, p.nombre, f.prod)).join("")}</select></div>
+          <div class="field"><label for="m-col">Colección</label><select id="m-col" class="select">${opt("", "Todas", f.col)}${D.colecciones.map((c) => opt(c.id, c.nombre, f.col)).join("")}</select></div>
+        </div>
+        ${nFil ? `<button class="btn ghost sm" id="m-clear" style="margin:0 8px 8px">Quitar filtros</button>` : ""}
+      </details>
+      <section class="card flush">
+        ${lista.length ? [...groups].map(([fecha, gs]) => `<div class="card-head pad" style="margin:0"><span class="xs muted day-head" style="font-weight:600">${esc(fmtDateLong(fecha))}${fecha.slice(0, 4) !== String(new Date().getFullYear()) ? " " + fecha.slice(0, 4) : ""}</span></div>
+          <ul class="list">${gs.map((g) => gastoRow(g)).join("")}</ul>`).join("")
+          : `<div class="empty">No hay gastos con estos filtros.</div>`}
+        ${lista.length ? `<div class="row" style="font-weight:650"><span class="row-main">${plural(lista.length, "gasto")}</span><span class="row-end"><b class="money">${moneyM(tot(lista))}</b></span></div>` : ""}
+      </section>
+      <button class="btn secondary" id="csv">${icon("download", "sm")} Exportar esta lista (CSV)</button>`,
+    bind() {
+      if (per) bindPeriod(() => per, (p) => setF({ per: p }), "mp");
+      $("#all-time").onclick = () => setF({ per: per ? "todo" : thisMonth() });
+      let t;
+      $("#m-q").oninput = (e) => { clearTimeout(t); t = setTimeout(() => { setF({ q: e.target.value }); const i = $("#m-q"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 350); };
+      $("#m-cat").onchange = (e) => setF({ cat: e.target.value });
+      $("#m-est").onchange = (e) => setF({ estado: e.target.value });
+      $("#m-prod").onchange = (e) => setF({ prod: e.target.value });
+      $("#m-col").onchange = (e) => setF({ col: e.target.value });
+      $("#m-clear")?.addEventListener("click", () => setF({ cat: "", prod: "", col: "", estado: "" }));
+      $("#csv").onclick = () => exportCsv(lista);
+    },
+  };
+}
+
+function exportCsv(lista) {
+  const I = S.I;
+  const rows = [["Fecha", "Importe", "Moneda", "Categoría", "Asociado a", "Concepto", "Descripción", "Medio de pago", "Estado del pago", "Pagado", "Pendiente", "Proveedor", "Cantidad", "Estimado"]];
+  for (const g of lista) {
+    const p = pagoInfo(I, g);
+    rows.push([g.fecha, (g.monto / 100).toFixed(2).replace(".", ","), g.moneda, CAT[g.categoria]?.nombre || "Sin categoría", destinoTexto(I, g) || "",
+      g.concepto || "", g.descripcion || "", g.medio_pago || "", { pagado: "Pagado", parcial: "Pago parcial", pendiente: "Pendiente" }[p.estado],
+      (p.pagado / 100).toFixed(2).replace(".", ","), (p.pendiente / 100).toFixed(2).replace(".", ","), g.proveedor || "", g.cantidad || "", g.estimado ? "Sí" : ""]);
+  }
+  const csv = "﻿" + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\n");
+  download(new Blob([csv], { type: "text/csv;charset=utf-8" }), `gastos-desgoises-${today()}.csv`);
+}
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* ================= Detalle de gasto ================= */
+
+function vGasto(id) {
+  const I = S.I;
+  const g = I.gasto.get(id);
+  if (!g) return null;
+  const c = CAT[g.categoria];
+  const p = pagoInfo(I, g);
+  const pagos = I.pagosDe.get(id) || [];
+  const t = g.tanda_id ? I.tanda.get(g.tanda_id) : null;
+  const bloqueado = !!t?.cerrada;
+  const destLink = g.muestra_id ? `#/muestra/${g.muestra_id}` : t ? `#/producto/${t.producto_id}?tanda=${t.id}` : g.producto_id ? `#/producto/${g.producto_id}`
+    : g.campana_id ? `#/campana/${g.campana_id}` : g.opcion_id ? `#/opcion/${g.opcion_id}` : null;
+  const dest = destinoTexto(I, g);
+  const dato = (k, v) => (v ? `<li class="row" style="min-height:48px"><span class="row-main muted small">${k}</span><span class="row-end" style="max-width:65%;text-align:right;white-space:normal">${v}</span></li>` : "");
+
+  return {
+    title: "Gasto",
+    parent: "#/movimientos",
+    html: `
+      <section class="card">
+        <div class="hero-label">${esc(c?.nombre || "Sin categoría")}</div>
+        <div class="hero-value money">${money(g.monto, g.moneda)}</div>
+        <div class="hero-sub">${esc(gastoTitulo(I, g))}</div>
+        <div class="chips" style="margin-top:8px">${p.estado === "pagado" ? '<span class="badge ok">Pagado</span>' : PAGO_BADGE[p.estado]}${g.estimado ? '<span class="badge info">Importe estimado</span>' : ""}${faltaAsignar(g) ? '<span class="badge warn">Pendiente de asignar</span>' : ""}</div>
+        ${p.estado !== "pagado" ? `<div class="stats three"><div class="stat"><span>Costo acordado</span><b class="money">${money(p.acordado, g.moneda)}</b></div>
+          <div class="stat"><span>Pagado</span><b class="money">${money(p.pagado, g.moneda)}</b></div>
+          <div class="stat"><span>Pendiente</span><b class="money">${money(p.pendiente, g.moneda)}</b></div></div>` : ""}
+      </section>
+      ${faltaAsignar(g) ? `<div class="note warn">${icon("alert", "sm")}<span>${g.categoria ? "Falta elegir a qué corresponde." : "Falta la categoría."} Tocá “Editar” para completarlo.</span></div>` : ""}
+      ${bloqueado ? `<div class="note warn">${icon("lock", "sm")}<span>Pertenece a una tanda cerrada. Reabrila para corregirlo.</span></div>` : ""}
+
+      <section class="card flush"><ul class="list">
+        ${dato("Fecha", esc(fmtDateLong(g.fecha)) + " " + g.fecha.slice(0, 4))}
+        ${dest ? dato("Asociado a", destLink ? `<a href="${destLink}" style="color:var(--accent);font-weight:600">${esc(dest)}</a>` : esc(dest)) : ""}
+        ${dato("Concepto", esc(g.concepto))}
+        ${dato("Descripción", esc(g.descripcion))}
+        ${dato("Medio de pago", esc(g.medio_pago))}
+        ${dato("Proveedor", esc(g.proveedor))}
+        ${g.cantidad ? dato("Cantidad", `${fmtInt(g.cantidad)} u. · ${money(g.monto / g.cantidad, g.moneda, true)} c/u`) : ""}
+        ${g.cubre_meses > 1 ? dato("Período que cubre", `${g.cubre_meses} meses (${money(g.monto / g.cubre_meses, g.moneda)} por mes)`) : ""}
+        ${g.en_cantidad ? dato("Tipo", "Compra de insumos en cantidad") : ""}
+      </ul></section>
+
+      ${g.comprobante_id ? `<a class="btn secondary" href="${fileUrl(g.comprobante_id)}" target="_blank" rel="noopener">${icon("file", "sm")} Ver comprobante</a>` : ""}
+
+      <h2 class="section-label">Pagos</h2>
+      <section class="card flush">
+        ${pagos.length ? `<ul class="list">${pagos.map((x) => `<li class="row"><span class="row-main"><span class="row-title">${esc(fmtDate(x.fecha))}</span><span class="row-sub">${esc(x.medio_pago || "")}</span></span>
+          <span class="row-end"><b class="money">${money(x.monto, g.moneda)}</b></span><button class="icon-btn" data-delpago="${x.id}" aria-label="Borrar pago">${icon("trash", "sm")}</button></li>`).join("")}</ul>` : `<div class="empty">Sin pagos registrados.</div>`}
+        ${p.pendiente > 0 ? `<button class="row add" id="pay"><span class="ico-box">${icon("wallet")}</span><span class="row-main">Registrar pago del saldo</span></button>` : ""}
+      </section>
+      <p class="hint" style="margin:0 4px">Registrar un pago no agrega costo: solo cambia cuánto está pagado.</p>
+
+      <div class="btn-row">
+        <button class="btn" id="edit" ${bloqueado ? "disabled" : ""}>${icon("pencil", "sm")} Editar</button>
+        <button class="btn danger" id="del" ${bloqueado ? "disabled" : ""}>${icon("trash", "sm")} Borrar</button>
+      </div>`,
+    bind() {
+      $("#edit").onclick = () => openCarga(ctx, g);
+      $("#del").onclick = async () => {
+        if (!(await confirmSheet({ title: "Borrar gasto", text: `Se borra el gasto de ${money(g.monto, g.moneda)} y sus pagos. Los totales se recalculan.`, ok: "Borrar", danger: true }))) return;
+        try { await api(`gastos/${id}`, { method: "DELETE" }); history.back(); await reload(); toast("Gasto borrado"); }
+        catch (err) { toast(err.message, true); }
+      };
+      $("#pay")?.addEventListener("click", () => registrarPago(g, p));
+      $$("[data-delpago]").forEach((b) => (b.onclick = async () => {
+        if (!(await confirmSheet({ title: "Borrar pago", text: "El importe vuelve a figurar como pendiente.", ok: "Borrar", danger: true }))) return;
+        try { await api(`pagos/${b.dataset.delpago}`, { method: "DELETE" }); await reload(); toast("Pago borrado"); }
+        catch (err) { toast(err.message, true); }
+      }));
+    },
+  };
+}
+
+function registrarPago(g, p) {
+  const medios = S.data.opciones.filter((o) => o.tipo === "medio_pago" && !o.archivada);
+  let medio = g.medio_pago;
+  sheet({
+    title: "Registrar pago",
+    render: ({ body, close }) => {
+      body.innerHTML = `<form class="stack">
+        <div class="field"><label for="p-m">Importe pagado</label><input id="p-m" class="input money" inputmode="decimal" value="${centsToInput(p.pendiente)}">
+          <span class="hint">Pendiente: ${money(p.pendiente, g.moneda)}</span></div>
+        <div class="field"><label for="p-f">Fecha</label><input id="p-f" type="date" class="input" value="${today()}"></div>
+        <div class="field"><span class="label">Medio de pago</span><div class="chips">${medios.map((o) => `<button type="button" class="chip" data-m="${esc(o.nombre)}" aria-pressed="${o.nombre === medio}">${esc(o.nombre)}</button>`).join("")}</div></div>
+        <div class="error-text" id="p-err" hidden></div>
+        <button class="btn block">Guardar pago</button></form>`;
+      const inp = $("#p-m", body);
+      inp.oninput = () => liveFormat(inp);
+      $$("[data-m]", body).forEach((b) => (b.onclick = () => { medio = b.dataset.m; $$("[data-m]", body).forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.m === medio))); }));
+      $("form", body).onsubmit = (e) => {
+        e.preventDefault();
+        const monto = parseAmount(inp.value);
+        if (!monto || monto > p.pendiente) { $("#p-err", body).textContent = `Tiene que ser mayor a cero y hasta ${money(p.pendiente, g.moneda)}.`; $("#p-err", body).hidden = false; return; }
+        busy($("form > button", body), async () => {
+          await api("pagos", { method: "POST", body: { gasto_id: g.id, fecha: $("#p-f", body).value || today(), monto, medio_pago: medio } });
+          await reload();
+          toast(monto === p.pendiente ? "Saldo cancelado" : "Pago registrado");
+          close();
+        }).catch(() => {});
+      };
+    },
+  });
+}
+
+/* ================= Gestionar ================= */
+
+const LISTAS = {
+  muestras: { titulo: "Muestras", table: "muestras", link: (x) => `#/muestra/${x.id}`, icon: "scissors", nuevo: "Nueva muestra", label: "Nombre de la muestra" },
+  colecciones: { titulo: "Colecciones", table: "colecciones", link: (x) => `#/coleccion/${x.id}`, icon: "layers", nuevo: "Nueva colección", label: "Nombre de la colección" },
+  campanas: { titulo: "Campañas de contenido", table: "campanas", link: (x) => `#/campana/${x.id}`, icon: "camera", nuevo: "Nueva campaña", label: "Nombre de la campaña" },
+  suscripcion: { titulo: "Suscripciones y fijos", tipo: "suscripcion", link: (x) => `#/opcion/${x.id}`, icon: "repeat", nuevo: "Agregar servicio", label: "Nombre del servicio" },
+  packaging: { titulo: "Packaging y presentación", tipo: "packaging", link: (x) => `#/opcion/${x.id}`, icon: "package", nuevo: "Agregar insumo", label: "Nombre del insumo" },
+  concepto_prod: { titulo: "Conceptos de producción", tipo: "concepto_prod", icon: "tag", nuevo: "Agregar concepto", label: "Concepto", hint: "Aparecen como opciones rápidas al cargar producción y en la lista de pendientes de cada tanda." },
+  concepto_campana: { titulo: "Conceptos de campaña", tipo: "concepto_campana", icon: "tag", nuevo: "Agregar concepto", label: "Concepto" },
+  medio_pago: { titulo: "Medios de pago", tipo: "medio_pago", icon: "wallet", nuevo: "Agregar medio de pago", label: "Medio de pago" },
+};
+
+function vGestionar() {
+  const D = S.data;
+  const n = (k) => {
+    const L = LISTAS[k];
+    return (L.table ? D[L.table] : D.opciones.filter((o) => o.tipo === L.tipo)).filter((x) => !x.archivada).length;
+  };
+  const link = (k) => `<li><a class="row" href="#/gestionar/${k}"><span class="ico-box">${icon(LISTAS[k].icon)}</span>
+    <span class="row-main"><span class="row-title">${LISTAS[k].titulo}</span></span><span class="row-end muted">${n(k)}</span>${icon("right", "chev")}</a></li>`;
+  return {
+    title: "Gestionar",
+    html: `
+      <section class="card flush"><ul class="list">${["muestras", "colecciones", "campanas"].map(link).join("")}</ul></section>
+      <h2 class="section-label">Opciones de carga</h2>
+      <section class="card flush"><ul class="list">${["suscripcion", "packaging", "concepto_prod", "concepto_campana", "medio_pago"].map(link).join("")}</ul></section>
+      <h2 class="section-label">Herramientas</h2>
+      <section class="card flush"><ul class="list">
+        <li><a class="row" href="#/simular"><span class="ico-box">${icon("calculator")}</span><span class="row-main"><span class="row-title wrap">Simular cobertura de gastos generales</span><span class="row-sub">Cuánto debería cubrir cada venta</span></span>${icon("right", "chev")}</a></li>
+      </ul></section>
+      <h2 class="section-label">Datos</h2>
+      <section class="card flush"><ul class="list">
+        <li><button class="row" id="imp"><span class="ico-box">${icon("upload")}</span><span class="row-main"><span class="row-title">Importar gastos de Notion</span><span class="row-sub">Trae los gastos viejos una sola vez; no duplica</span></span></button></li>
+        <li><button class="row" id="bkp"><span class="ico-box">${icon("download")}</span><span class="row-main"><span class="row-title">Descargar copia de seguridad</span><span class="row-sub">Todos los datos en un archivo</span></span></button></li>
+        <li><button class="row" id="out"><span class="ico-box">${icon("logout")}</span><span class="row-main"><span class="row-title">Cerrar sesión en este teléfono</span></span></button></li>
+      </ul></section>`,
+    bind() {
+      $("#imp").onclick = async () => {
+        if (!(await confirmSheet({ title: "Importar de Notion", text: "Se traen los gastos de la base de Notion. Los que no tengan producto, muestra o campaña van a quedar como “pendientes de asignar” para que los completes cuando quieras. Si ya se importaron, no se duplican.", ok: "Importar" }))) return;
+        toast("Importando…");
+        try { const r = await api("importar-notion", { method: "POST" }); await reload(); toast(`Listo: ${r.nuevos} gastos nuevos de ${r.leidos} leídos`); }
+        catch (err) { toast(err.message, true); }
+      };
+      $("#bkp").onclick = () => download(new Blob([JSON.stringify(S.data, null, 1)], { type: "application/json" }), `desgoises-copia-${today()}.json`);
+      $("#out").onclick = async () => { await api("logout", { method: "POST" }).catch(() => {}); S.data = null; S.I = null; showLogin(); };
+    },
+  };
+}
+
+function vGestionarLista(k) {
+  const L = LISTAS[k];
+  if (!L) return null;
+  const D = S.data, I = S.I;
+  const items = (L.table ? D[L.table] : D.opciones.filter((o) => o.tipo === L.tipo));
+  const act = items.filter((x) => !x.archivada), arch = items.filter((x) => x.archivada);
+  const count = (x) => {
+    if (L.table === "muestras") return moneyM(tot(I.gastosDeMuestra.get(x.id) || []));
+    if (L.table === "colecciones") return moneyM(coleccionCosts(I, x.id).total);
+    if (L.table === "campanas") return moneyM(campaignInfo(I, x.id).total);
+    if (L.tipo === "suscripcion" || L.tipo === "packaging") return moneyM(tot(I.gastosDeOpcion.get(x.id) || []));
+    if (L.tipo === "medio_pago") return plural(D.gastos.filter((g) => g.medio_pago === x.nombre).length, "gasto");
+    return plural(D.gastos.filter((g) => g.concepto === x.nombre).length, "gasto");
+  };
+  const row = (x) => L.link
+    ? `<li><a class="row" href="${L.link(x)}"><span class="ico-box">${icon(L.icon)}</span><span class="row-main"><span class="row-title">${esc(x.nombre)}</span>
+       ${x.producto_id ? `<span class="row-sub">Vinculada a ${esc(I.producto.get(x.producto_id)?.nombre)}</span>` : ""}</span><span class="row-end"><b class="money">${count(x)}</b></span>${icon("right", "chev")}</a></li>`
+    : `<li><button class="row" data-edit="${x.id}"><span class="ico-box">${icon(L.icon)}</span><span class="row-main"><span class="row-title">${esc(x.nombre)}</span></span><span class="row-end muted small">${count(x)}</span>${icon("pencil", "sm")}</button></li>`;
+  return {
+    title: L.titulo,
+    parent: "#/gestionar",
+    html: `
+      ${L.hint ? `<p class="hint" style="margin:0 4px">${L.hint}</p>` : ""}
+      <section class="card flush"><ul class="list">
+        <li><button class="row add" id="new"><span class="ico-box">${icon("plus")}</span><span class="row-main">${L.nuevo}</span></button></li>
+        ${act.map(row).join("")}</ul></section>
+      ${arch.length ? `<details class="card" style="padding:0"><summary class="row" style="border:0">${icon("archive")}<span class="row-main">Archivados (${arch.length})</span>${icon("down", "chev")}</summary><ul class="list">${arch.map(row).join("")}</ul></details>` : ""}`,
+    bind() {
+      $("#new").onclick = async () => {
+        if (k === "campanas") return nuevaCampana();
+        const r = await promptSheet({ title: L.nuevo, label: L.label, ok: "Crear" });
+        if (!r) return;
+        try {
+          const row = await api(L.table || "opciones", { method: "POST", body: L.table ? { nombre: r.value } : { tipo: L.tipo, nombre: r.value, orden: 50 } });
+          await reload();
+          toast("Creado");
+          if (L.link) location.hash = L.link(row);
+        } catch (err) { toast(err.message, true); }
+      };
+      $$("[data-edit]").forEach((b) => (b.onclick = () => editarSimple("opciones", I.opcion.get(Number(b.dataset.edit)), "opción")));
+    },
+  };
+}
+
+/* ================= Simulación de cobertura ================= */
+
+const SIM = { mes: null, excluir: new Set(), incluirGrandes: new Set(), ventas: "", recupero: 12 };
+
+function vSimular() {
+  const I = S.I;
+  const cob = S.data.ajustes.cobertura;
+  if (!SIM.mes) { SIM.mes = cob?.mes || addMonths(thisMonth(), -1); SIM.ventas = cob?.ventas ? String(cob.ventas) : ""; }
+  const items = generalesDelMes(I, SIM.mes).map((it) => ({
+    ...it, incluir: it.grande ? SIM.incluirGrandes.has(it.gasto.id) : !SIM.excluir.has(it.gasto.id),
+  }));
+  const ventas = Number(SIM.ventas) || 0;
+  const r = simularCobertura(items.filter((i) => (i.gasto.moneda || "ARS") === "ARS"), ventas, SIM.recupero);
+  const hayUsd = items.some((i) => i.gasto.moneda === "USD");
+
+  return {
+    title: "Simular cobertura",
+    parent: "#/gestionar",
+    html: `
+      <p class="hint" style="margin:0 4px">Herramienta para evaluar precios. No crea ni modifica gastos. Los gastos ya asignados a productos o campañas no entran, para no contarlos dos veces.</p>
+      ${periodNav(SIM.mes, "sm", false)}
+      <section class="card flush">
+        ${items.length ? `<ul class="list">${items.map((it) => `<li><label class="row">
+          <input type="checkbox" data-it="${it.gasto.id}" data-grande="${it.grande ? 1 : ""}" ${it.incluir ? "checked" : ""} style="width:22px;height:22px">
+          <span class="row-main"><span class="row-title">${esc(gastoTitulo(I, it.gasto))}</span>
+          <span class="row-sub">${esc(CAT[it.gasto.categoria].nombre)}${it.meses > 1 ? ` · 1/${it.meses} del pago del ${esc(fmtDate(it.gasto.fecha))}` : ""}${it.grande ? " · compra grande" : ""}</span></span>
+          <span class="row-end"><b class="money">${money(it.grande ? it.gasto.monto / Math.max(1, SIM.recupero) : it.importe, it.gasto.moneda)}</b>${it.grande ? `<span class="row-sub">en ${SIM.recupero} meses</span>` : ""}</span></label></li>`).join("")}</ul>`
+          : `<div class="empty">No hay gastos generales en ${monthName(SIM.mes)}.</div>`}
+      </section>
+      ${items.some((i) => i.grande) ? `<div class="field"><label for="s-rec">Recuperar compras grandes en (meses)</label><input id="s-rec" class="input" inputmode="numeric" value="${SIM.recupero}"></div>` : ""}
+      <div class="field"><label for="s-v">Ventas esperadas en el mes (unidades)</label><input id="s-v" class="input" inputmode="numeric" value="${esc(SIM.ventas)}" placeholder="Ej.: 50">
+        <span class="hint">Son las unidades que esperás vender, no las producidas.</span></div>
+      <section class="card">
+        <div class="stats" style="margin:0;padding:0;border:0">
+          <div class="stat"><span>Gastos generales elegidos</span><b class="money">${money(r.total)}</b></div>
+          <div class="stat"><span>A cubrir por unidad vendida</span><b class="money">${r.porUnidad != null ? money(r.porUnidad, "ARS", true) : "—"}</b></div>
+        </div>
+        ${hayUsd ? `<p class="hint" style="margin:12px 0 0">Los gastos en dólares no se suman a pesos. Quedan fuera del cálculo.</p>` : ""}
+      </section>
+      <button class="btn" id="use" ${r.porUnidad == null ? "disabled" : ""}>${icon("check")} Usar como costo de referencia</button>
+      ${cob ? `<p class="hint" style="margin:0 4px">En uso: ${money(cob.porUnidad, "ARS", true)} por unidad (${esc(monthName(cob.mes))}, ${fmtInt(cob.ventas)} ventas). Se suma en el tercer nivel de costo de cada producto.</p>` : ""}`,
+    bind() {
+      bindPeriod(() => SIM.mes, (p) => { SIM.mes = p; render(true); }, "sm");
+      $$("[data-it]").forEach((b) => (b.onchange = () => {
+        const id = Number(b.dataset.it);
+        if (b.dataset.grande) b.checked ? SIM.incluirGrandes.add(id) : SIM.incluirGrandes.delete(id);
+        else b.checked ? SIM.excluir.delete(id) : SIM.excluir.add(id);
+        render(true);
+      }));
+      const v = $("#s-v");
+      v.onchange = () => { SIM.ventas = v.value.replace(/\D/g, ""); render(true); };
+      $("#s-rec")?.addEventListener("change", (e) => { SIM.recupero = Math.max(1, Number(e.target.value.replace(/\D/g, "")) || 12); render(true); });
+      $("#use").onclick = (e) => busy(e.currentTarget, async () => {
+        await api("ajustes", { method: "PUT", body: { clave: "cobertura", valor: { porUnidad: Math.round(r.porUnidad), mes: SIM.mes, ventas, total: Math.round(r.total), fecha: today() } } });
+        await reload();
+        toast("Costo de referencia actualizado");
+      }).catch(() => {});
+    },
+  };
+}
+
+/* ================= Inicio ================= */
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+start();
