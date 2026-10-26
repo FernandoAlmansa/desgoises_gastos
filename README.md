@@ -104,7 +104,7 @@ Los datos no se tocan al publicar.
 ## Copias de seguridad
 
 - **Desde la app:** Gestionar → **Descargar copia de seguridad** (un archivo con todos los datos).
-- **Automática:** Cloudflare guarda el historial de la base de los últimos 30 días. Para volver a un momento anterior:
+- **Automática:** Cloudflare guarda el historial de la base de los últimos 7 días (30 con el plan pago). Para volver a un momento anterior:
 
 ```bash
 npx wrangler d1 time-travel restore desgoises-gastos --timestamp=2026-10-25T12:00:00Z
@@ -112,7 +112,7 @@ npx wrangler d1 time-travel restore desgoises-gastos --timestamp=2026-10-25T12:0
 
 ## Costos
 
-Todo entra en el plan gratis de Cloudflare: 100.000 pedidos por día y 5 GB de base de datos. Las fotos se achican en el teléfono antes de subirse (unos 150 KB cada una), así que entran miles.
+Todo entra en el plan gratis de Cloudflare: 100.000 pedidos por día y una base de hasta 500 MB. Los gastos ocupan muy poco (cientos de miles entran holgados); lo que más pesa son las fotos y comprobantes, que se achican en el teléfono antes de subirse (unos 150–250 KB cada uno): entran unos 2.000. Si algún día se llena, el plan pago de Workers (USD 5 por mes) lleva la base a 10 GB.
 
 ## Probar en la computadora sin publicar
 
