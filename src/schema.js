@@ -163,6 +163,15 @@ export const MIGRATIONS = {
     // "Envíos y posventa" deja de existir: lo cargado ahí pasa a Postventa (dentro de Otros gastos).
     `UPDATE gastos SET categoria = 'posventa' WHERE categoria = 'envios'`,
     ...seed("concepto_molde", ["Moldería papel kraft", "Moldería papel"]),
+    // Prendas entregadas como parte de pago en una campaña: suman su costo de fabricación y desarrollo a la campaña.
+    `CREATE TABLE IF NOT EXISTS campana_prendas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campana_id INTEGER NOT NULL REFERENCES campanas(id),
+      producto_id INTEGER NOT NULL REFERENCES productos(id),
+      tanda_id INTEGER REFERENCES tandas(id),
+      cantidad INTEGER NOT NULL,
+      creado TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
   ],
 };
 

@@ -497,3 +497,8 @@ details.bal-fold[open] > summary .chev { transform: rotate(180deg); }
 .cat-btn > span:not(.ico-box) { flex: 1; }
 .cat-btn .chev { color: var(--muted); }
 .bal-head .row-title { white-space: normal; }
+
+/* Campaña: prendas entregadas, con − y + */
+.stepper { display: flex; align-items: center; gap: 2px; flex: none; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); }
+.stepper b { min-width: 24px; text-align: center; font-size: 17px; font-weight: 650; }
+.stepper .icon-btn { width: 44px; height: 44px; }

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   index, campaignInfo, tandaCosts, coleccionCosts, pagoInfo, splitByUnits, avisos,
   generalesDelMes, simularCobertura, faltaAsignar, M, balancePeriodo, conclusionPeriodo, estampaInfo, pasoTanda, inPeriod,
-  estadoProduccion,
+  estadoProduccion, costoFabricacion,
 } from "../public/js/calc.js";
 
 const $ = (pesos) => pesos * 100;
@@ -295,4 +295,23 @@ test("Estado de la producción: preparación hasta la primera tela, después pro
   D.tandas[1].cerrada = 1;
   I = index(D);
   assert.equal(estadoProduccion(I, D.tandas[1]), "finalizada");
+});
+
+test("Prendas entregadas como parte de pago: suman su costo de fabricación a la campaña y se reparten", () => {
+  const D = base();
+  // Crewneck negro: $800.000 de producción / 40 u. = $20.000 c/u. Se entregan 3 → la campaña pasa de $300.000 a $360.000.
+  D.campanaPrendas = [{ id: 1, campana_id: 1, producto_id: 2, tanda_id: 2, cantidad: 3 }];
+  const I = index(D);
+  assert.equal(M.get(costoFabricacion(I, D.tandas[1]).porUnidad), $(20000));
+  const c = campaignInfo(I, 1);
+  assert.equal(M.get(c.totalPrendas), $(60000));
+  assert.equal(M.get(c.total), $(360000));
+  // El crewneck negro (40 de 100 u.) lleva $120.000 de gastos y $24.000 de prendas.
+  const tc = tandaCosts(I, 2);
+  assert.equal(M.get(tc.lineas.campana.total), $(120000));
+  assert.equal(M.get(tc.lineas.prendas.total), $(24000));
+  // En la colección se muestran, pero no se vuelven a sumar al costo total.
+  const col = coleccionCosts(I, 1);
+  assert.equal(M.get(col.lineas.prendas.total), $(60000));
+  assert.equal(M.get(col.total), M.get(coleccionCosts(index(base()), 1).total));
 });

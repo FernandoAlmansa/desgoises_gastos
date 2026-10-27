@@ -3,7 +3,7 @@ import {
   CATEGORIAS, CAT, M, index, pagoInfo, unidades, tandaCosts, productoResumen, coleccionCosts, campaignInfo,
   avisos, faltaAsignar, tandaLabel, destinoTexto, gastoTitulo, tandaColeccionId, generalesDelMes, simularCobertura,
   addMonths, publiColeccionInfo, esTela, esEstampa, ESTAMPA, estampaInfo, telasDeMuestra,
-  inPeriod, conclusionPeriodo, ESTADO_PROD, ENVIO, compraNombre, moldeNombre, multiInfo,
+  inPeriod, conclusionPeriodo, ESTADO_PROD, ENVIO, compraNombre, moldeNombre, multiInfo, tandaParaPrenda, costoFabricacion,
 } from "./calc.js";
 import {
   icon, $, $$, esc, money, moneyM, fmtInt, parseAmount, liveFormat, centsToInput, today, thisMonth, monthName, fmtDate,
@@ -513,9 +513,19 @@ function vProducto(id, q) {
           extra: u.n && !M.isZero(L.campana.total) ? `${perUnit(L.campana.total, u.n)} por unidad` : "",
           body: L.campana.campanas.length ? `<ul class="list">${L.campana.campanas.map((c) => `<li><a class="row" href="#/campana/${c.campana.id}">
               <span class="row-main"><span class="row-title">${esc(c.campana.nombre)}</span>
-              <span class="row-sub">Total campaña ${moneyM(c.info.total)} · ${c.info.totalUnidades ? fmtInt(c.info.totalUnidades) + " u. participantes" : "faltan cantidades"}</span></span>
+              <span class="row-sub">Gastos de la campaña ${moneyM(c.info.totalGastos)} · ${c.info.totalUnidades ? fmtInt(c.info.totalUnidades) + " u. participantes" : "faltan cantidades"}</span></span>
               <span class="row-end"><b class="money">${c.monto ? moneyM(c.monto) : "Pendiente"}</b>${c.info.estado === "estimado" ? '<span class="badge info">Estimado</span>' : c.info.estado === "falta_cantidad" ? '<span class="badge warn">Pendiente</span>' : ""}</span></a></li>`).join("")}</ul>`
             : `<p class="hint" style="margin:0">No participa en campañas. Se agrega desde la ficha de la campaña.</p>`,
+        })}
+        ${fold({
+          title: "Prendas entregadas como parte de pago", total: moneyM(L.prendas.total),
+          extra: u.n && !M.isZero(L.prendas.total) ? `${perUnit(L.prendas.total, u.n)} por unidad` : "",
+          body: L.prendas.campanas.length ? `<ul class="list">${L.prendas.campanas.map((c) => `<li><a class="row" href="#/campana/${c.campana.id}">
+              <span class="row-main"><span class="row-title wrap">${esc(c.campana.nombre)}</span>
+              <span class="row-sub wrap">${esc(c.info.prendas.map((x) => `${x.cantidad} ${x.producto.nombre}`).join(", "))} · total ${moneyM(c.info.totalPrendas)}</span></span>
+              <span class="row-end"><b class="money">${c.montoPrendas ? moneyM(c.montoPrendas) : "Pendiente"}</b></span></a></li>`).join("")}</ul>
+              <p class="hint" style="margin:8px 0 0">El costo de las prendas entregadas se suma a la campaña y se reparte por unidades entre sus productos.</p>`
+            : `<p class="hint" style="margin:0">Sus campañas no tienen prendas entregadas como parte de pago.</p>`,
         })}
         ${fold({
           title: "Publicidad asignada", total: moneyM(L.publicidad.total),
@@ -1041,6 +1051,15 @@ function vColeccion(id) {
         ${colFold("Moldería todos los talles", L.molderia, plural(L.molderia.grupos.length, "molde"))}
         ${sumRow("Total de fabricación y desarrollo de la colección", cc.fabricacion, "subtotal")}
         ${colFold("Campañas de contenido", L.campana, plural(L.campana.grupos.length, "campaña"))}
+        ${fold({
+          title: `Prendas entregadas como parte de pago <span class="muted fold-n">(${plural(L.prendas.unidades, "prenda")})</span>`, total: moneyM(L.prendas.total),
+          extra: L.prendas.items.length ? "ya está en producción" : "",
+          body: L.prendas.items.length ? `<ul class="list">${L.prendas.items.map((x) => `<li><a class="row" href="#/campana/${x.campana.id}">${thumb(x.producto)}
+              <span class="row-main"><span class="row-title wrap">${esc(x.producto.nombre)}</span><span class="row-sub wrap">${plural(x.cantidad, "unidad", "unidades")} · ${esc(x.campana.nombre)}</span></span>
+              <span class="row-end"><b class="money">${x.monto ? moneyM(x.monto) : "Pendiente"}</b></span></a></li>`).join("")}</ul>
+              <p class="hint" style="margin:8px 0 0">No se suma de nuevo al costo total: fabricar esas prendas ya está contado arriba. En cada producto sí suma, como parte del costo de la campaña.</p>`
+            : `<p class="hint" style="margin:0">No se entregaron prendas como parte de pago.</p>`,
+        })}
         ${colFold("Publicidad de sus productos", L.publicidad, plural(L.publicidad.items.length, "gasto"))}
         ${sumRow("Costo total de la colección", cc.total, "grand")}
       </section>
@@ -1141,13 +1160,29 @@ function vCampana(id) {
       <section class="card">
         <div class="hero-label">Gasto de la campaña${c.coleccion_id ? ` · ${esc(I.coleccion.get(c.coleccion_id)?.nombre)}` : ""}</div>
         <div class="hero-value money">${moneyM(info.total)}</div>
+        ${info.prendas.length ? `<div class="hero-sub">Gastos ${moneyM(info.totalGastos)} + prendas entregadas ${moneyM(info.totalPrendas)}</div>` : ""}
         <div style="margin-top:8px"><span class="badge ${estadoTxt[0]}">${estadoTxt[1]}</span></div>
         <p class="hint" style="margin:8px 0 0">${esc(estadoTxt[2])}</p>
       </section>
 
       <h2 class="section-label">Gastos de la campaña</h2>
       <section class="card flush">${gastoList(info.gastos, { showCat: false })}</section>
-      <button class="btn" id="add-g">${icon("plus")} Cargar gasto a esta campaña</button>
+
+      <h2 class="section-label">Prendas entregadas como parte de pago</h2>
+      <section class="card flush">
+        ${info.prendas.length ? `<ul class="list">${info.prendas.map((x) => `<li><button class="row" data-prendas>${thumb(x.producto)}
+          <span class="row-main"><span class="row-title wrap">${esc(x.producto.nombre)}</span>
+          <span class="row-sub wrap">${plural(x.cantidad, "unidad", "unidades")} · ${x.unit ? `${moneyM(x.unit)} c/u (fabricación y desarrollo)` : "falta el costo por unidad"}</span></span>
+          <span class="row-end"><b class="money">${x.monto ? moneyM(x.monto) : "Pendiente"}</b>${x.monto ? "" : '<span class="badge warn">Falta cantidad</span>'}</span></button></li>`).join("")}
+          <li><div class="row total-row"><span class="row-main"><span class="row-title">${plural(info.unidadesEntregadas, "prenda")} entregada${info.unidadesEntregadas === 1 ? "" : "s"}</span></span>
+            <span class="row-end"><b class="money">${moneyM(info.totalPrendas)}</b></span></div></li></ul>`
+          : `<div class="empty" style="padding:16px">No se entregaron prendas en esta campaña.</div>`}
+      </section>
+      <p class="hint" style="margin:0 4px">Cada prenda suma a la campaña lo que costó fabricarla y desarrollarla (por unidad). Si todavía no tiene cantidad, queda pendiente.</p>
+      <div class="btn-row">
+        <button class="btn secondary" id="add-prenda">${icon("shirt", "sm")} Prenda entregada como parte de pago</button>
+        <button class="btn" id="add-g">${icon("plus")} Cargar gasto a esta campaña</button>
+      </div>
 
       <h2 class="section-label">Reparto por unidades</h2>
       <section class="card">
@@ -1158,6 +1193,8 @@ function vCampana(id) {
       </section>`,
     bind() {
       $("#parts").onclick = () => elegirParticipantes(c, info);
+      $("#add-prenda").onclick = () => elegirPrendas(c, info);
+      $$("[data-prendas]").forEach((b) => (b.onclick = () => elegirPrendas(c, info)));
       $("#add-g").onclick = () => openCarga(ctx, null, { categoria: "campanas", campana_id: id });
     },
   };
@@ -1174,6 +1211,44 @@ function repartoTable(info) {
     }).join("")}
     <tr class="total"><td>Total</td><td class="money">${info.totalUnidades ? fmtInt(info.totalUnidades) : "—"}</td><td class="money">${info.asignado.size ? moneyM(M.sum([...info.asignado.values()])) : "—"}</td><td></td></tr>
   </tbody></table>`;
+}
+
+// Qué productos y cuántas unidades se entregaron como parte de pago. Primero los de la colección de la campaña.
+function elegirPrendas(c, info) {
+  const I = S.I;
+  const cant = new Map(info.prendas.map((x) => [x.producto.id, x.cantidad]));
+  const prods = S.data.productos.filter((p) => !p.archivado || cant.has(p.id)).sort((a, b) =>
+    (b.coleccion_id === c.coleccion_id) - (a.coleccion_id === c.coleccion_id) || a.nombre.localeCompare(b.nombre, "es"));
+  sheet({
+    title: "Prendas entregadas",
+    foot: true,
+    render: ({ body, foot, close }) => {
+      body.innerHTML = prods.length ? `<p class="hint" style="margin:0">Elegí cuántas unidades de cada producto entregaste como parte de pago. Cada una suma su costo de fabricación y desarrollo a la campaña.</p>
+        <div class="card flush"><ul class="list">${prods.map((p) => {
+          const t = tandaParaPrenda(I, p.id), cf = t ? costoFabricacion(I, t) : null;
+          const n = cant.get(p.id) || 0;
+          return `<li><div class="row">${thumb(p)}<span class="row-main"><span class="row-title wrap">${esc(p.nombre)}</span>
+            <span class="row-sub wrap">${cf?.porUnidad && !M.isZero(cf.total) ? `${moneyM(cf.porUnidad)} c/u` : "Sin costo por unidad todavía"}</span></span>
+            <span class="stepper" data-p="${p.id}" data-t="${t?.id ?? ""}">
+              <button type="button" class="icon-btn" data-d="-1" aria-label="Una menos de ${esc(p.nombre)}">${icon("minus")}</button>
+              <b class="num" aria-live="polite">${n}</b>
+              <button type="button" class="icon-btn" data-d="1" aria-label="Una más de ${esc(p.nombre)}">${icon("plus")}</button></span></div></li>`;
+        }).join("")}</ul></div>` : `<div class="empty">Primero creá productos.</div>`;
+      foot.innerHTML = `<button class="btn block">${icon("check")} Guardar prendas</button>`;
+      $$(".stepper", body).forEach((s) => $$("[data-d]", s).forEach((b) => (b.onclick = () => {
+        const v = Math.max(0, Number($("b", s).textContent) + Number(b.dataset.d));
+        $("b", s).textContent = v;
+      })));
+      $("button", foot).onclick = (e) => busy(e.currentTarget, async () => {
+        const prendas = $$(".stepper", body).map((s) => ({ producto_id: Number(s.dataset.p), tanda_id: s.dataset.t ? Number(s.dataset.t) : null, cantidad: Number($("b", s).textContent) }))
+          .filter((x) => x.cantidad > 0);
+        await api(`campanas/${c.id}/prendas`, { method: "PUT", body: { prendas } });
+        await reload();
+        toast(prendas.length ? "Prendas guardadas · campaña recalculada" : "Sin prendas entregadas");
+        close();
+      }).catch(() => {});
+    },
+  });
 }
 
 function elegirParticipantes(c, info) {

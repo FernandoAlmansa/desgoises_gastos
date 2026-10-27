@@ -100,6 +100,9 @@ async function api(request, env, url) {
   if (parts[0] === "gastos" && parts[2] === "tandas" && method === "PUT") {
     return json(await setGastoTandas(db, int(parts[1]), await request.json()));
   }
+  if (parts[0] === "campanas" && parts[2] === "prendas" && method === "PUT") {
+    return json(await setCampanaPrendas(db, int(parts[1]), await request.json()));
+  }
   if (parts[0] === "gastos" && parts[2] === "vinculos" && method === "PUT") {
     return json(await setGastoVinculos(db, int(parts[1]), await request.json()));
   }
@@ -164,7 +167,7 @@ async function requireAuth(request, env) {
 async function allData(db) {
   const q = (sql) => db.prepare(sql).all().then((r) => r.results);
   const [opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, ajustes, historial,
-    gastoTandas, productoPackaging, gastoVinculos] =
+    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas] =
     await Promise.all([
       q("SELECT * FROM opciones ORDER BY tipo, orden, nombre"),
       q("SELECT * FROM colecciones ORDER BY creado DESC"),
@@ -181,10 +184,11 @@ async function allData(db) {
       q("SELECT * FROM gasto_tandas"),
       q("SELECT * FROM producto_packaging ORDER BY id"),
       q("SELECT * FROM gasto_vinculos"),
+      q("SELECT * FROM campana_prendas ORDER BY id"),
     ]);
   return {
     opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, historial,
-    gastoTandas, productoPackaging, gastoVinculos,
+    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas,
     ajustes: Object.fromEntries(ajustes.map((a) => [a.clave, safeParse(a.valor)])),
   };
 }
@@ -283,14 +287,19 @@ async function deleteRow(db, table, id) {
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE tanda_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM tanda_conceptos WHERE tanda_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE tanda_id = ?").bind(id));
+    stmts.push(db.prepare("UPDATE campana_prendas SET tanda_id = NULL WHERE tanda_id = ?").bind(id));
   }
-  if (table === "campanas") stmts.push(db.prepare("DELETE FROM campana_tandas WHERE campana_id = ?").bind(id));
+  if (table === "campanas") {
+    stmts.push(db.prepare("DELETE FROM campana_tandas WHERE campana_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM campana_prendas WHERE campana_id = ?").bind(id));
+  }
   if (table === "productos") {
     const t = await db.prepare("SELECT COUNT(*) AS n FROM gastos WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id).first();
     if (t.n > 0) throw new HttpError(409, "Tiene gastos asociados. Archivalo en lugar de borrarlo.");
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id));
     stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id));
     stmts.push(db.prepare("DELETE FROM producto_packaging WHERE producto_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM campana_prendas WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM tandas WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("UPDATE muestras SET producto_id = NULL WHERE producto_id = ?").bind(id));
   }
@@ -314,6 +323,19 @@ async function setGastoTandas(db, gastoId, body) {
   const ids = [...new Set((body.tanda_ids || []).map(int))];
   const stmts = [db.prepare("DELETE FROM gasto_tandas WHERE gasto_id = ?").bind(gastoId)];
   for (const t of ids) stmts.push(db.prepare("INSERT INTO gasto_tandas (gasto_id, tanda_id) VALUES (?, ?)").bind(gastoId, t));
+  await db.batch(stmts);
+  return { ok: true };
+}
+
+// Prendas entregadas como parte de pago en una campaña: reemplaza la lista completa (producto, tanda, cantidad).
+async function setCampanaPrendas(db, campanaId, body) {
+  const stmts = [db.prepare("DELETE FROM campana_prendas WHERE campana_id = ?").bind(campanaId)];
+  for (const x of body.prendas || []) {
+    const cant = Math.round(Number(x.cantidad));
+    if (!(cant > 0)) continue;
+    stmts.push(db.prepare("INSERT INTO campana_prendas (campana_id, producto_id, tanda_id, cantidad) VALUES (?, ?, ?, ?)")
+      .bind(campanaId, int(x.producto_id), x.tanda_id == null ? null : int(x.tanda_id), cant));
+  }
   await db.batch(stmts);
   return { ok: true };
 }

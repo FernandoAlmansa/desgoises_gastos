@@ -109,6 +109,7 @@ export function index(D) {
     tandasDeGasto, vinculosDe, enviosDe, partesDe,
     multiDeTanda: new Map(),
     packagingDeProducto: group(D.productoPackaging || [], "producto_id"),
+    prendasDeCampana: group(D.campanaPrendas || [], "campana_id"),
   };
   for (const ct of D.campanaTandas) {
     push(I.tandasDeCampana, ct.campana_id, ct.tanda_id);
@@ -191,12 +192,52 @@ export function splitByUnits(totalCents, units) {
   return out;
 }
 
+// Costo de fabricación y desarrollo de una tanda (producción, muestras, moldería y packaging), sin campañas ni publicidad.
+function partesFabricacion(I, t) {
+  const u = unidades(t);
+  const prod = (I.gastosDeTanda.get(t.id) || []).filter((g) => g.categoria === "produccion");
+  const esPrimera = primeraTanda(I, t.producto_id)?.id === t.id;
+  const muestrasG = esPrimera ? gastosMuestras(I, t.producto_id) : [];
+  const moldes = esPrimera ? moldesDeProducto(I, t.producto_id, t.id) : [];
+  const pack = packagingInfo(I, t.producto_id, u.n);
+  const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
+  const total = M.sum([tot(prod), tot(muestrasG), ...moldes.map((x) => x.monto || {}), ...pack.map((x) => x.monto || {})]);
+  return { u, prod, esPrimera, muestrasG, moldes, pack, total };
+}
+export function costoFabricacion(I, t) {
+  const f = partesFabricacion(I, t);
+  return { total: f.total, n: f.u.n, porUnidad: f.u.n ? M.scale(f.total, 1 / f.u.n) : null };
+}
+
+// De qué tanda sale una prenda entregada: la más reciente que ya tenga cantidad (si no, la última).
+export function tandaParaPrenda(I, productoId) {
+  const ts = (I.tandasDeProducto.get(productoId) || []).slice().sort((a, b) => b.id - a.id);
+  return ts.find((t) => unidades(t).n != null) || ts[0] || null;
+}
+
+// Prendas entregadas como parte de pago: cada una vale su costo de fabricación y desarrollo por unidad.
+export function prendasCampana(I, campanaId) {
+  return (I.prendasDeCampana.get(campanaId) || []).map((x) => {
+    const t = I.tanda.get(x.tanda_id) || tandaParaPrenda(I, x.producto_id);
+    const c = t ? costoFabricacion(I, t) : null;
+    const unit = c?.porUnidad && !M.isZero(c.total) ? c.porUnidad : null;
+    return { prenda: x, producto: I.producto.get(x.producto_id), tanda: t, cantidad: x.cantidad, unit,
+      monto: unit ? Object.fromEntries(Object.entries(unit).map(([k, v]) => [k, Math.round(v * x.cantidad)])) : null };
+  }).filter((x) => x.producto);
+}
+
+// El gasto de una campaña son sus gastos más el costo de las prendas entregadas como parte de pago.
+// Se reparte todo por unidades; aparte se lleva cuánto de cada parte corresponde a las prendas.
 export function campaignInfo(I, campanaId) {
   if (I.campaignCache.has(campanaId)) return I.campaignCache.get(campanaId);
   const gastos = I.gastosDeCampana.get(campanaId) || [];
-  const total = M.sum(gastos.filter((g) => g.categoria === "campanas").map((g) => M.of(g.moneda, g.monto)));
+  const totalGastos = M.sum(gastos.filter((g) => g.categoria === "campanas").map((g) => M.of(g.moneda, g.monto)));
+  const prendas = prendasCampana(I, campanaId);
+  const totalPrendas = M.sum(prendas.map((x) => x.monto || {}));
   const tandas = (I.tandasDeCampana.get(campanaId) || []).map((id) => I.tanda.get(id));
-  const info = { id: campanaId, ...repartir(total, tandas, gastos) };
+  const info = { id: campanaId, ...repartir(M.add(totalGastos, totalPrendas), tandas, gastos), totalGastos, totalPrendas, prendas,
+    unidadesEntregadas: prendas.reduce((s, x) => s + x.cantidad, 0), prendasSinCosto: prendas.filter((x) => !x.monto) };
+  info.asignadoPrendas = repartir(totalPrendas, tandas, []).asignado;
   I.campaignCache.set(campanaId, info);
   return info;
 }
@@ -259,18 +300,17 @@ function repartir(total, tandas, gastos) {
 
 export function tandaCosts(I, tandaId) {
   const t = I.tanda.get(tandaId);
-  const u = unidades(t);
-  const propios = I.gastosDeTanda.get(tandaId) || [];
-  const prod = propios.filter((g) => g.categoria === "produccion");
-  const publi = propios.filter((g) => g.categoria === "publicidad");
-  const esPrimera = primeraTanda(I, t.producto_id)?.id === t.id;
-  const muestrasG = esPrimera ? gastosMuestras(I, t.producto_id) : [];
-  const moldes = esPrimera ? moldesDeProducto(I, t.producto_id, tandaId) : [];
+  const { u, prod, esPrimera, muestrasG, moldes, pack } = partesFabricacion(I, t);
+  const publi = (I.gastosDeTanda.get(tandaId) || []).filter((g) => g.categoria === "publicidad");
   const desa = [...muestrasG, ...moldes.map((x) => x.gasto)];
 
+  // De cada campaña, la parte de sus gastos y, aparte, la parte de las prendas entregadas como parte de pago.
   const campanas = (I.campanasDeTanda.get(tandaId) || []).map((cid) => {
     const c = campaignInfo(I, cid);
-    return { campana: I.campana.get(cid), info: c, monto: c.asignado.get(tandaId) || null };
+    const total = c.asignado.get(tandaId) || null;
+    const prendas = c.asignadoPrendas.get(tandaId) || null;
+    const gastos = total ? M.add(total, M.scale(prendas || {}, -1)) : null;
+    return { campana: I.campana.get(cid), info: c, monto: gastos, montoPrendas: prendas, montoTotal: total };
   });
 
   const colId = tandaColeccionId(I, t);
@@ -282,7 +322,6 @@ export function tandaCosts(I, tandaId) {
     return { gasto: g, info, monto: info.asignado.get(tandaId) || null };
   });
   const moldesMulti = moldes.filter((x) => x.info);
-  const pack = packagingInfo(I, t.producto_id, u.n);
 
   const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
   const moldeTotal = M.sum(moldes.map((x) => x.monto || {}));
@@ -293,13 +332,14 @@ export function tandaCosts(I, tandaId) {
     desarrollo: { total: M.add(tot(muestrasG), moldeTotal), gastos: desa, aplica: esPrimera },
     packaging: { total: M.sum(pack.map((x) => x.monto || {})), items: pack },
     campana: { total: M.sum(campanas.map((c) => c.monto || {})), campanas },
+    prendas: { total: M.sum(campanas.map((c) => c.montoPrendas || {})), campanas: campanas.filter((c) => c.info.prendas.length) },
     publicidad: {
       total: M.sum([tot(publi), publiCol?.monto || {}, ...publiMulti.map((x) => x.monto || {})]),
       gastos: publi, coleccion: publiCol, multi: publiMulti,
     },
   };
   const fabricacion = M.sum([lineas.produccion.total, lineas.muestras.total, lineas.molderia.total, lineas.packaging.total]);
-  const directo = M.sum([fabricacion, lineas.campana.total, lineas.publicidad.total]);
+  const directo = M.sum([fabricacion, lineas.campana.total, lineas.prendas.total, lineas.publicidad.total]);
 
   // Conceptos de producción que todavía no tienen gasto ni están marcados "no aplica".
   const conceptos = I.D.opciones.filter((o) => o.tipo === "concepto_prod" && !o.archivada).map((o) => o.nombre);
@@ -474,6 +514,10 @@ export function coleccionCosts(I, coleccionId) {
     publicidad: linea(publi),
   };
   L.desarrollo = { total: M.add(L.muestras.total, L.molderia.total), gastos: [...L.muestras.gastos, ...L.molderia.gastos] };
+  // Prendas entregadas como parte de pago en sus campañas. Se muestran, pero no se vuelven a sumar al costo total:
+  // fabricarlas ya está contado en Producción, muestras y moldería de la colección.
+  const prendas = campanas.flatMap((c) => campaignInfo(I, c.id).prendas.map((x) => ({ ...x, campana: c })));
+  L.prendas = { total: M.sum(prendas.map((x) => x.monto || {})), items: prendas, unidades: prendas.reduce((s, x) => s + x.cantidad, 0) };
   const fabricacion = M.sum([L.produccion.total, L.muestras.total, L.molderia.total]);
   const todos = [...prod, ...mues, ...moldes, ...camp, ...publi];
   const pagos = todos.map((x) => pagoDeParte(I, x.gasto, x.monto));

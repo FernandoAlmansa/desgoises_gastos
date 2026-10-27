@@ -10,16 +10,16 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 ## Estado actual
 
 - **Publicación:** automática. Desde el 26/10, Cloudflare (Settings → Build) está conectado al repositorio de GitHub, rama `main`: cada vez que se sube algo, la app se publica sola en uno o dos minutos. Ya no hace falta `npx wrangler deploy`.
-- **Versión de la base de datos:** v5 (envíos y cadetes, envíos vinculados a telas o moldes, conceptos de moldería). Se actualiza sola en la primera visita después de publicar.
+- **Versión de la base de datos:** v5 (envíos y cadetes, envíos vinculados a telas o moldes, conceptos de moldería, prendas entregadas en campañas). Se actualiza sola en la primera visita después de publicar.
 - **Pendientes / dudas abiertas:**
-  - **Prendas entregadas como parte de pago** (campañas de contenido): falta hacerlo. El usuario va a mandar cómo se ve en los gastos de la campaña. Ya está pensado el lugar: en la campaña (entre los gastos y el reparto), en la ficha del producto (debajo de "Campaña asignada") y en el balance de la colección (debajo de "Campañas de contenido").
+  - **Prendas entregadas en la colección:** se muestran en el balance pero **no** se suman al costo total, porque fabricarlas ya está contado en Producción (si no, se contaría dos veces). Confirmar con el usuario que está bien así.
   - El packaging vinculado se suma en el producto, pero **no** en el total de la colección (el usuario no lo puso en la lista del balance de la colección).
   - Si una publicidad se reparte entre productos de **colecciones distintas**, en cada colección se cuenta el gasto entero (no solo su parte).
   - Esta computadora no tiene Node: los cambios del 27/10 se probaron con un servidor de prueba en Python y datos de ejemplo, no con `npm run dev`. Las pruebas de `test/calc.test.js` se corrieron en el navegador.
 
 ---
 
-## 2026-10-27 (2) — Encuadre de fotos, estado automático, moldería compartida, envíos y cadetes, otros gastos
+## 2026-10-27 (2) — Encuadre de fotos, estado automático, moldería compartida, envíos y cadetes, otros gastos, prendas entregadas
 
 **Qué cambió**
 - **Fotos:** al elegir una foto (producto, muestra o colección) se abre "Encuadrar foto": se arrastra para centrarla y se acerca con dos dedos o con la barra. Se guarda cuadrada, tal cual se ve. El botón para cambiarla ahora es una camarita sobre la foto.
@@ -44,6 +44,11 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
   - "Publicidad de la colección" pasó al final de la pantalla.
 - **Campaña:** primero los gastos (con el botón para cargar) y después el reparto por unidades.
 - **Gestionar:** salieron Colecciones y Campañas (ya están en su pestaña). Se agregó **Moldería todos los talles**, con cada molde por el nombre de la descripción, y **Conceptos de moldería** en opciones de carga.
+- **Prendas entregadas como parte de pago** (campañas de contenido)
+  - En la campaña: primero los gastos, después "Prendas entregadas como parte de pago" y abajo el reparto por unidades. El botón **"Prenda entregada como parte de pago"** va antes de "Cargar gasto a esta campaña": se elige cuántas unidades de cada producto (con − y +).
+  - Cada prenda suma a la campaña su **costo de fabricación y desarrollo por unidad** (de la tanda más reciente que tenga cantidad). Arriba se ve "Gastos $ X + prendas entregadas $ Y".
+  - Ese total se reparte por unidades como el resto de la campaña. En la ficha del producto aparece **"Prendas entregadas como parte de pago"** debajo de "Campaña asignada", con la parte que le toca, y suma al total directo.
+  - En la colección aparece la línea "Prendas entregadas como parte de pago (N prendas)" con el aviso "ya está en producción": se ve, pero no se vuelve a sumar al costo total de la colección.
 - **Detalle de un gasto:** un envío muestra entre qué compras se repartió; una moldería compartida muestra qué productos la usan y cuánto le toca a cada uno; una compra de tela o moldería muestra sus envíos.
 
 **Por qué**
@@ -55,11 +60,11 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 - En las listas, la parte de un envío repartido muestra lo que le toca y, abajo, "de $ total del envío".
 
 **Notas técnicas**
-- Esquema v5 (`src/schema.js`): `gastos.envio` (`correo` | `expreso` | `cadete`), tabla `gasto_vinculos` (envío → compras de tela o moldería), `UPDATE` de `envios` a `posventa`, opciones `concepto_molde`.
-- Worker: columna `envio` validada, ruta `PUT /api/gastos/:id/vinculos`, `gastoVinculos` en `/api/data` y limpieza de vínculos al borrar un gasto. Importación de Notion: "Envíos" → `posventa`.
-- `calc.js`: `MENU_CARGA`, `ENVIO`, `estadoProduccion`, `multiInfo` (reemplaza a `publiMultiInfo`, que queda como atajo), `moldesDeProducto`, `gastosMuestras`, `expandir`. `index()` arma `I.gastos`, donde cada envío vinculado se reemplaza por sus partes (repartidas con `splitByUnits` según el monto de cada compra); los índices por tanda, producto y muestra usan esa lista. `tandaCosts` y `coleccionCosts` devuelven `lineas.muestras` y `lineas.molderia` (se mantiene `lineas.desarrollo`). `tandas.estado` ya no se usa.
+- Esquema v5 (`src/schema.js`): `gastos.envio` (`correo` | `expreso` | `cadete`), tabla `campana_prendas` (campaña, producto, tanda, cantidad), tabla `gasto_vinculos` (envío → compras de tela o moldería), `UPDATE` de `envios` a `posventa`, opciones `concepto_molde`.
+- Worker: columna `envio` validada, rutas `PUT /api/gastos/:id/vinculos` y `PUT /api/campanas/:id/prendas`, `gastoVinculos` y `campanaPrendas` en `/api/data` y limpieza de vínculos al borrar un gasto. Importación de Notion: "Envíos" → `posventa`.
+- `calc.js`: `MENU_CARGA`, `ENVIO`, `estadoProduccion`, `costoFabricacion`, `prendasCampana`, `tandaParaPrenda` (`campaignInfo` suma las prendas y devuelve `totalGastos`, `totalPrendas` y `asignadoPrendas`; `tandaCosts` tiene `lineas.prendas`), `multiInfo` (reemplaza a `publiMultiInfo`, que queda como atajo), `moldesDeProducto`, `gastosMuestras`, `expandir`. `index()` arma `I.gastos`, donde cada envío vinculado se reemplaza por sus partes (repartidas con `splitByUnits` según el monto de cada compra); los índices por tanda, producto y muestra usan esa lista. `tandaCosts` y `coleccionCosts` devuelven `lineas.muestras` y `lineas.molderia` (se mantiene `lineas.desarrollo`). `tandas.estado` ya no se usa.
 - `ui.js`: `cropSquare(file)` (encuadre con arrastre, pellizco y barra).
-- 3 pruebas nuevas (22 en total, todas pasan, corridas en el navegador). Caché de la app `dg-v5`.
+- 4 pruebas nuevas (23 en total, todas pasan, corridas en el navegador). Caché de la app `dg-v5`.
 
 ## 2026-10-27 — Balance y conclusión en el Resumen, muestras con foto, tipos de estampa
 
