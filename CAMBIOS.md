@@ -10,13 +10,47 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 ## Estado actual
 
 - **Publicación:** automática. Desde el 26/10, Cloudflare (Settings → Build) está conectado al repositorio de GitHub, rama `main`: cada vez que se sube algo, la app se publica sola en uno o dos minutos. Ya no hace falta `npx wrangler deploy`.
-- **Versión de la base de datos:** v3 (foto de colección, publicidad a varios productos, packaging vinculado). Se actualiza sola en la primera visita después de publicar.
+- **Versión de la base de datos:** v4 (foto y "no se va a producir" en muestras, tipo de estampa en gastos). Se actualiza sola en la primera visita después de publicar.
 - **Pendientes / dudas abiertas:**
   - Confirmar que la 3.ª categoría es **Moldería** (salió de un audio que decía "mueblería / mordería").
   - El packaging vinculado se suma en el producto, pero **no** en el total de la colección (allá se suman gastos, y la compra de packaging es un gasto general). Revisar si se quiere ver también en la colección.
   - Si una publicidad se reparte entre productos de **colecciones distintas**, en cada colección se cuenta el gasto entero (no solo su parte).
+  - En el balance del Resumen, la **moldería** va junto con las muestras ("Muestras y moldería"), y envíos, comisiones y administración van en "Gastos no asignados". Confirmar que así está bien.
+  - Esta computadora no tiene Node: los cambios del 27/10 se probaron con un servidor de prueba en Python y datos de ejemplo, no con `npm run dev`.
 
 ---
+
+## 2026-10-27 — Balance y conclusión en el Resumen, muestras con foto, tipos de estampa
+
+**Qué cambió**
+- **Resumen**
+  - "Por categoría" pasó a ser un **Balance**: Producción y Muestras → **Gastos de producir ropa**; después Campañas de contenido de colecciones y Publicidad → **Gastos de producir y vender ropa**.
+  - Dentro de cada línea ya no aparecen los gastos sueltos: aparece **cada muestra, producto o campaña** con una flechita. Al desplegarla se ven las descripciones de sus gastos.
+  - Debajo, **Gastos no asignados**: equipamiento, packaging y presentación, suscripciones y fijos (y envíos, comisiones o administración si hubo), y **Muestras no producidas**.
+  - Al final, **Conclusión del mes** (o del año): un cuadro con las colecciones que tuvieron producción (Comenzó / En curso / Terminada / Completa) y en qué paso está cada producto, y abajo un texto que explica en qué se fue la plata: producción, muestras, campañas (qué parte del mes y de la colección son), gastos fuera de producción, compras únicas grandes (por ejemplo, un foco) y saldos pagados de meses anteriores.
+  - La conclusión **se arma sola** con lo que se carga; no hay que tocar nada ni actualizarla.
+- **Muestras**
+  - Cada muestra tiene **foto** (cuadrada, arriba, al lado del total acumulado). La lista de Gestionar → Muestras muestra esa foto.
+  - Debajo aparece **Tela/s utilizada/s** (solo los nombres).
+  - Casilla **"No se va a producir"**: al tildarla, lo gastado en esa muestra pasa a "Gastos no asignados" del Resumen como gasto extra (si estaba vinculada a un producto, se desvincula).
+- **Carga de estampa:** al elegir el concepto Estampa pregunta el tipo: **Bordado, Serigrafía o DTF**. Con Serigrafía aparece la casilla **"Estampado por mí"**; tildada, el campo de descripción pasa a "¿Qué compraste para estampar?", para cargar cada compra (tinta, shablón…) aparte.
+- **Ficha del producto → Conceptos de producción**
+  - **Tela** se despliega: cada tela con kilos y plata, en total y por unidad, y qué porcentaje de toda la tela es.
+  - **Estampa** se despliega por método (Bordado, DTF, Serigrafía ajena, Serigrafía por mí) y cada uno muestra sus gastos con total y valor por unidad. El total de Estampa es la suma de todos.
+- **Colecciones:** las tarjetas siguen cuadradas pero más chicas, de a dos por fila.
+
+**Por qué**
+- Pedido del usuario con 7 capturas del celular. La idea de la conclusión es entender rápido, sobre todo mirando meses anteriores, si el mes se fue en producir colecciones, en muestras o en terminar de pagar.
+
+**Decisiones**
+- El paso de cada producto sale del último gasto de producción cargado, en este orden: tela → corte → estampa → confección → lavadero. Si hay gasto de un paso, el producto está en el siguiente (salteando los marcados "No aplica"). Una colección está terminada cuando todas sus tandas están "Revisada y cerrada"; la fecha de cierre sale del historial.
+- El tipo de estampa no es obligatorio: si no se elige, en la ficha figura como "Sin tipo".
+
+**Notas técnicas**
+- Esquema v4 (`src/schema.js`): `muestras.foto_id`, `muestras.no_produce`, `gastos.estampa` (`bordado` | `serigrafia` | `serigrafia_propia` | `dtf`). El Worker acepta esas columnas y valida el tipo de estampa.
+- `calc.js`: `balancePeriodo`, `conclusionPeriodo`, `pasoTanda`, `estampaInfo`, `telasDeMuestra`, `muestraNoProducida`, `inPeriod` (se movió desde `app.js`) y `telaInfo().porNombre`.
+- 4 pruebas nuevas en `test/calc.test.js` (19 en total, todas pasan). Como acá no hay Node, se corrieron en el navegador con un servidor de prueba en Python y se revisaron las pantallas con tamaño de celular y datos de ejemplo.
+- Caché de la app `dg-v4`.
 
 ## 2026-10-26 — Pedido con capturas: Resumen, Colecciones, ficha del producto y packaging
 

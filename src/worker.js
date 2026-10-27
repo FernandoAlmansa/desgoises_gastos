@@ -17,12 +17,12 @@ const TABLES = {
   colecciones: ["nombre", "foto_id", "archivada"],
   productos: ["nombre", "coleccion_id", "foto_id", "archivado"],
   tandas: ["producto_id", "nombre", "coleccion_id", "cant_estimada", "cant_final", "estado", "cerrada"],
-  muestras: ["nombre", "producto_id", "archivada"],
+  muestras: ["nombre", "producto_id", "archivada", "foto_id", "no_produce"],
   campanas: ["nombre", "coleccion_id", "archivada"],
   gastos: [
     "fecha", "monto", "moneda", "categoria", "muestra_id", "producto_id", "tanda_id", "campana_id",
     "opcion_id", "concepto", "descripcion", "medio_pago", "proveedor", "comprobante_id", "cantidad",
-    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id",
+    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id", "estampa",
   ],
   pagos: ["gasto_id", "fecha", "monto", "medio_pago"],
   producto_packaging: ["producto_id", "gasto_id", "por_prenda"],
@@ -203,7 +203,8 @@ function clean(table, body, partial) {
       v = Math.round(Number(v) * 100) / 100;
       if (!Number.isFinite(v) || v <= 0) throw new HttpError(400, "La cantidad por prenda tiene que ser mayor a cero");
     }
-    if (["estimado", "en_cantidad", "cerrada", "archivada", "archivado"].includes(col)) v = v ? 1 : 0;
+    if (v !== null && col === "estampa" && !["bordado", "serigrafia", "serigrafia_propia", "dtf"].includes(v)) throw new HttpError(400, "Tipo de estampa inválido");
+    if (["estimado", "en_cantidad", "cerrada", "archivada", "archivado", "no_produce"].includes(col)) v = v ? 1 : 0;
     if (typeof v === "string") v = v.trim().slice(0, 500);
     out[col] = v;
   }

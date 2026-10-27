@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   index, campaignInfo, tandaCosts, coleccionCosts, pagoInfo, splitByUnits, avisos,
-  generalesDelMes, simularCobertura, faltaAsignar, M,
+  generalesDelMes, simularCobertura, faltaAsignar, M, balancePeriodo, conclusionPeriodo, estampaInfo, pasoTanda, inPeriod,
 } from "../public/js/calc.js";
 
 const $ = (pesos) => pesos * 100;
@@ -200,4 +200,54 @@ test("Packaging vinculado: precio por unidad de la compra × por prenda × unida
   assert.equal(M.get(tc.lineas.packaging.total), $(2400));
   assert.equal(M.get(tc.fabricacion), $(800000) + $(2400));
   assert.equal(M.get(tc.directo), M.get(tc.fabricacion) + M.get(tc.lineas.campana.total) + M.get(tc.lineas.publicidad.total));
+});
+
+test("Balance del mes: producir ropa, producir y vender, y gastos no asignados aparte", () => {
+  const I = index(base());
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-10")));
+  assert.equal(M.get(B.produccion.total), $(800000));
+  assert.equal(B.produccion.grupos.length, 1);
+  assert.equal(B.produccion.grupos[0].nombre, "Crewneck negro");
+  assert.equal(M.get(B.producir), $(800000));
+  assert.equal(M.get(B.vender), $(1100000));
+  assert.deepEqual(B.noAsignados.map((x) => x.key), ["packaging", "suscripciones"]);
+  assert.equal(M.get(B.totalNoAsignados), $(180000));
+});
+
+test("Muestra que no se va a producir: su gasto pasa a no asignados", () => {
+  const D = base();
+  D.muestras[1].no_produce = 1;
+  const I = index(D);
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-09")));
+  assert.equal(M.get(B.muestras.total), $(80000));
+  assert.equal(B.muestras.grupos[0].nombre, "Campera con capucha");
+  assert.equal(M.get(B.noAsignados.find((x) => x.key === "no_producidas").total), $(30000));
+});
+
+test("Estampa: se separa por método y la serigrafía por mí junta varias compras", () => {
+  const g = (id, monto, estampa) => ({ id, fecha: "2026-10-04", monto: $(monto), moneda: "ARS", categoria: "produccion", tanda_id: 2, concepto: "Estampa", estampa });
+  const est = estampaInfo([g(30, 10000, "bordado"), g(31, 5000, "serigrafia_propia"), g(32, 3000, "serigrafia_propia"), { id: 33, concepto: "Tela", monto: 1 }]);
+  assert.deepEqual(est.map((x) => x.nombre), ["Bordado", "Serigrafía por mí"]);
+  assert.equal(M.get(est[1].total), $(8000));
+});
+
+test("Conclusión: colección comenzada, paso de cada producto y peso de la campaña", () => {
+  const D = base();
+  let C = conclusionPeriodo(index(D), "2026-10");
+  assert.equal(C.principal.key, "produccion");
+  const archive = C.colecciones[0];
+  assert.equal(archive.estado, "comenzada");
+  // El crewneck negro tiene tela y confección: sigue el lavadero.
+  assert.equal(archive.productos.find((p) => p.tanda.id === 2).estado, "En lavadero");
+  assert.equal(Math.round(C.campanas[0].pctMes), Math.round((300000 / 1280000) * 100));
+
+  // Sin lavadero ("no aplica") queda lista para cerrar.
+  D.tandaConceptos = [{ tanda_id: 2, concepto: "Lavadero", estado: "no_aplica" }];
+  assert.equal(pasoTanda(index(D), D.tandas[1], "2026-10-31").estado, "Lista para cerrar");
+
+  // Todas las tandas revisadas y cerradas en octubre: la colección se produjo completa ese mes.
+  for (const t of D.tandas) t.cerrada = 1;
+  D.historial = D.tandas.map((t, i) => ({ id: i + 1, entidad: "tandas", entidad_id: t.id, fecha: "2026-10-20 12:00:00", detalle: JSON.stringify({ cerrada: [0, 1] }) }));
+  C = conclusionPeriodo(index(D), "2026-10");
+  assert.equal(C.colecciones[0].estado, "completa");
 });

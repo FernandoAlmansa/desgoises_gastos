@@ -1,7 +1,7 @@
 // Estructura de la base. Se aplica sola la primera vez que el Worker recibe un pedido.
 // Si más adelante cambia, subir SCHEMA_VERSION y agregar las sentencias nuevas al final de MIGRATIONS.
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const MIGRATIONS = {
   1: [
@@ -143,6 +143,13 @@ export const MIGRATIONS = {
       por_prenda REAL NOT NULL DEFAULT 1,
       creado TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
+  ],
+  4: [
+    // Foto de cada muestra y marca "no se va a producir" (su gasto pasa a ser un gasto extra de la marca).
+    `ALTER TABLE muestras ADD COLUMN foto_id INTEGER`,
+    `ALTER TABLE muestras ADD COLUMN no_produce INTEGER NOT NULL DEFAULT 0`,
+    // Tipo de estampa: bordado | serigrafia (de un taller) | serigrafia_propia (estampada por uno) | dtf
+    `ALTER TABLE gastos ADD COLUMN estampa TEXT`,
   ],
 };
 

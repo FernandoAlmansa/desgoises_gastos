@@ -1,5 +1,5 @@
 // Carga y edición de un gasto: Monto → categoría → selección → detalle → guardar.
-import { CATEGORIAS, CAT, pagoInfo, tandaLabel, tandaColeccionId, unidades, esTela } from "./calc.js";
+import { CATEGORIAS, CAT, pagoInfo, tandaLabel, tandaColeccionId, unidades, esTela, esEstampa, ESTAMPA } from "./calc.js";
 import {
   icon, esc, $, $$, money, parseAmount, liveFormat, centsToInput, today, fmtDate, api, toast, sheet, busy,
   uploadFile, fileUrl, plural, promptSheet, parseKg, fmtKg, fmtInt,
@@ -15,6 +15,7 @@ const DESTINO_TXT = {
   suscripcion: { titulo: "¿Qué servicio?", nuevo: "Agregar nuevo", label: "Nombre del servicio", ej: "Ej.: Canva" },
   packaging: { titulo: "¿Qué compraste?", nuevo: "Agregar nuevo", label: "Nombre del insumo", ej: "Ej.: Cajas" },
 };
+const STAMP_OPC = [["bordado", "Bordado"], ["serigrafia", "Serigrafía"], ["dtf", "DTF"]];
 const DESC_EJ = {
   muestras: "Ej.: Segunda prueba de talle", produccion: "Ej.: Tela rústica negra 40 m", molderia: "Ej.: Moldes y progresión de talles",
   campanas: "Ej.: Estudio medio día", publicidad: "Ej.: Instagram, 7 días", suscripciones: "Ej.: Plan mensual",
@@ -136,7 +137,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       return D.muestras.filter((m) => !m.archivada).map((m) => {
         const n = (i.gastosDeMuestra.get(m.id) || []).length;
         const prod = m.producto_id ? i.producto.get(m.producto_id)?.nombre : null;
-        return { id: m.id, nombre: m.nombre, sub: [prod && `Vinculada a ${prod}`, n ? plural(n, "gasto") : "Sin gastos"].filter(Boolean).join(" · "), icon: "scissors" };
+        return { id: m.id, nombre: m.nombre, sub: [prod && `Vinculada a ${prod}`, m.no_produce && "No se va a producir", n ? plural(n, "gasto") : "Sin gastos"].filter(Boolean).join(" · "), foto: m.foto_id, icon: "scissors" };
       });
     }
     if (c.destino === "producto") {
@@ -359,7 +360,12 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         </div></div>
       <div class="field" id="f-kg-wrap" ${esTela(st.concepto) ? "" : "hidden"}><label for="f-kg">Cantidad de tela (kg)</label>
         <input id="f-kg" class="input" inputmode="decimal" placeholder="Ej.: 12,5" value="${st.kg ? esc(fmtKg(st.kg, 3)) : ""}" autocomplete="off">
-        <span class="hint" id="f-kg-hint">Con los kilos y las unidades que salgan se calcula el rendimiento de la tela.</span></div>` : ""}
+        <span class="hint" id="f-kg-hint">Con los kilos y las unidades que salgan se calcula el rendimiento de la tela.</span></div>
+      <div class="field" id="f-stamp-wrap" ${esEstampa(st.concepto) ? "" : "hidden"}><span class="label">Tipo de estampa</span>
+        <div class="chips" id="f-stamp">${STAMP_OPC.map(([k, t]) => `<button type="button" class="chip" data-stamp="${k}" aria-pressed="${stampBase() === k}">${t}</button>`).join("")}</div>
+        <label class="row" id="f-propia-wrap" style="border:0;padding:0;min-height:44px" ${stampBase() === "serigrafia" ? "" : "hidden"}>
+          <input type="checkbox" id="f-propia" ${st.estampa === "serigrafia_propia" ? "checked" : ""} style="width:22px;height:22px">
+          <span class="row-main"><span class="row-title">Estampado por mí</span><span class="row-sub" style="white-space:normal">Tildalo si la estampaste vos. Cargá cada compra (tintas, shablón…) como un gasto aparte.</span></span></label></div>` : ""}
       ${st.categoria === "packaging" ? `<div class="field"><label for="f-cant">Cantidad de unidades compradas</label>
         <input id="f-cant" class="input" inputmode="numeric" placeholder="Ej.: 5.000" value="${st.cantidad ? esc(st.cantidad.toLocaleString("es-AR")) : ""}">
         <span class="hint" id="f-unit"></span></div>` : ""}
@@ -367,8 +373,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         <div class="chips" id="f-cubre">${[[1, "1 mes"], [3, "3 meses"], [6, "6 meses"], [12, "1 año"]].map(([n, t]) =>
           `<button type="button" class="chip" data-cubre="${n}" aria-pressed="${(st.cubre_meses || 1) === n}">${t}</button>`).join("")}</div>
         <span class="hint">Se registra el pago completo hoy; en la simulación de gastos generales se reparte en el período.</span></div>` : ""}
-      <div class="field"><label for="f-desc">Descripción</label>
-        <input id="f-desc" class="input" value="${esc(st.descripcion || "")}" placeholder="${esc(DESC_EJ[st.categoria] || "")}" autocomplete="off"></div>
+      <div class="field"><label for="f-desc" id="f-desc-label">${esc(descTxt()[0])}</label>
+        <input id="f-desc" class="input" value="${esc(st.descripcion || "")}" placeholder="${esc(descTxt()[1])}" autocomplete="off"></div>
       <div class="field"><label for="f-fecha">Fecha</label>
         <input id="f-fecha" class="input" type="date" value="${esc(st.fecha)}" max="2100-12-31"></div>
       <div class="field"><span class="label">Medio de pago</span>
@@ -405,10 +411,28 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       $$(sel, body).forEach((x) => x.setAttribute("aria-pressed", String(conv(x.dataset[attr]) === st[key])));
       after?.();
     }));
+    const showDesc = () => { const [l, ph] = descTxt(); $("#f-desc-label", body).textContent = l; $("#f-desc", body).placeholder = ph; };
     bindChips("[data-conc]", "concepto", "conc", undefined, () => {
       const wrap = $("#f-kg-wrap", body);
       if (wrap) wrap.hidden = !esTela(st.concepto);
+      const sw = $("#f-stamp-wrap", body);
+      if (sw) sw.hidden = !esEstampa(st.concepto);
+      showDesc();
     });
+    // Estampa: bordado, serigrafía o DTF. La serigrafía puede ser de un taller o hecha por uno mismo.
+    $$("[data-stamp]", body).forEach((b) => (b.onclick = () => {
+      const k = b.dataset.stamp;
+      st.estampa = stampBase() === k ? null : k === "serigrafia" && $("#f-propia", body).checked ? "serigrafia_propia" : k;
+      $$("[data-stamp]", body).forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.stamp === stampBase())));
+      $("#f-propia-wrap", body).hidden = stampBase() !== "serigrafia";
+      showDesc();
+    }));
+    const propia = $("#f-propia", body);
+    if (propia) propia.onchange = () => {
+      if (stampBase() === "serigrafia") st.estampa = propia.checked ? "serigrafia_propia" : "serigrafia";
+      showDesc();
+      if (propia.checked) $("#f-desc", body).focus();
+    };
     const kg = $("#f-kg", body);
     const showKg = () => {
       const n = parseKg(kg.value);
@@ -459,6 +483,13 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     $("#f-save", body.parentElement).onclick = (e) => save(e.currentTarget);
   }
 
+  const stampBase = () => (st.estampa?.startsWith("serigrafia") ? "serigrafia" : st.estampa || null);
+  // Con serigrafía hecha por uno mismo, cada compra se describe (tinta, shablón, emulsión…).
+  function descTxt() {
+    if (esEstampa(st.concepto) && st.estampa === "serigrafia_propia") return ["¿Qué compraste para estampar?", "Ej.: Tinta plastisol blanca 1 kg"];
+    return ["Descripción", DESC_EJ[st.categoria] || ""];
+  }
+
   function compHtml() {
     if (st.comprobante_id) {
       return `<div class="btn-row"><a class="btn secondary sm" href="${fileUrl(st.comprobante_id)}" target="_blank" rel="noopener">${icon("file", "sm")} Ver comprobante</a>
@@ -506,7 +537,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const payload = {
       fecha: st.fecha, monto: st.monto, moneda: st.moneda, categoria: st.categoria,
       muestra_id: st.muestra_id, producto_id: st.producto_id, tanda_id: st.tanda_id, campana_id: st.campana_id, opcion_id: st.opcion_id,
-      coleccion_id: st.coleccion_id, kg: esTela(st.concepto) ? st.kg : null, concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
+      coleccion_id: st.coleccion_id, kg: esTela(st.concepto) ? st.kg : null, estampa: esEstampa(st.concepto) ? st.estampa || null : null, concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
       comprobante_id: st.comprobante_id, cantidad: st.categoria === "packaging" ? st.cantidad : null,
       cubre_meses: st.categoria === "suscripciones" ? st.cubre_meses || 1 : null, estimado: st.estimado, en_cantidad: st.en_cantidad,
     };
@@ -536,7 +567,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       <div class="ok-circle">${icon("check")}</div>
       <h3 style="margin:8px 0 0;font-size:22px">Gasto guardado</h3>
       <div class="hero-value money" style="font-size:32px">${money(st.monto, st.moneda)}</div>
-      <div class="muted">${esc([c?.nombre, destinoNombre(), st.concepto].filter(Boolean).join(" · "))}</div>
+      <div class="muted">${esc([c?.nombre, destinoNombre(), st.concepto, esEstampa(st.concepto) && ESTAMPA[st.estampa]].filter(Boolean).join(" · "))}</div>
       <div class="muted small">${esc(fmtDate(st.fecha))}${st.estadoPago !== "pagado" ? ` · ${st.estadoPago === "parcial" ? "Pago parcial" : "Pendiente de pago"}` : ""}</div>
     </div>`;
     foot.innerHTML = `<div class="btn-row"><button class="btn secondary" id="l-ok">Listo</button><button class="btn" id="l-otro">${icon("plus")} Cargar otro</button></div>`;
