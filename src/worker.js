@@ -22,7 +22,7 @@ const TABLES = {
   gastos: [
     "fecha", "monto", "moneda", "categoria", "muestra_id", "producto_id", "tanda_id", "campana_id",
     "opcion_id", "concepto", "descripcion", "medio_pago", "proveedor", "comprobante_id", "cantidad",
-    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id", "estampa",
+    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id", "estampa", "envio",
   ],
   pagos: ["gasto_id", "fecha", "monto", "medio_pago"],
   producto_packaging: ["producto_id", "gasto_id", "por_prenda"],
@@ -100,6 +100,9 @@ async function api(request, env, url) {
   if (parts[0] === "gastos" && parts[2] === "tandas" && method === "PUT") {
     return json(await setGastoTandas(db, int(parts[1]), await request.json()));
   }
+  if (parts[0] === "gastos" && parts[2] === "vinculos" && method === "PUT") {
+    return json(await setGastoVinculos(db, int(parts[1]), await request.json()));
+  }
   if (path === "tanda_conceptos" && method === "PUT") {
     const b = await request.json();
     if (b.estado) {
@@ -161,7 +164,7 @@ async function requireAuth(request, env) {
 async function allData(db) {
   const q = (sql) => db.prepare(sql).all().then((r) => r.results);
   const [opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, ajustes, historial,
-    gastoTandas, productoPackaging] =
+    gastoTandas, productoPackaging, gastoVinculos] =
     await Promise.all([
       q("SELECT * FROM opciones ORDER BY tipo, orden, nombre"),
       q("SELECT * FROM colecciones ORDER BY creado DESC"),
@@ -177,10 +180,11 @@ async function allData(db) {
       q("SELECT * FROM historial ORDER BY id DESC LIMIT 500"),
       q("SELECT * FROM gasto_tandas"),
       q("SELECT * FROM producto_packaging ORDER BY id"),
+      q("SELECT * FROM gasto_vinculos"),
     ]);
   return {
     opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, historial,
-    gastoTandas, productoPackaging,
+    gastoTandas, productoPackaging, gastoVinculos,
     ajustes: Object.fromEntries(ajustes.map((a) => [a.clave, safeParse(a.valor)])),
   };
 }
@@ -203,6 +207,7 @@ function clean(table, body, partial) {
       v = Math.round(Number(v) * 100) / 100;
       if (!Number.isFinite(v) || v <= 0) throw new HttpError(400, "La cantidad por prenda tiene que ser mayor a cero");
     }
+    if (v !== null && col === "envio" && !["correo", "expreso", "cadete"].includes(v)) throw new HttpError(400, "Tipo de envío inválido");
     if (v !== null && col === "estampa" && !["bordado", "serigrafia", "serigrafia_propia", "dtf"].includes(v)) throw new HttpError(400, "Tipo de estampa inválido");
     if (["estimado", "en_cantidad", "cerrada", "archivada", "archivado", "no_produce"].includes(col)) v = v ? 1 : 0;
     if (typeof v === "string") v = v.trim().slice(0, 500);
@@ -272,6 +277,7 @@ async function deleteRow(db, table, id) {
     stmts.push(db.prepare("DELETE FROM pagos WHERE gasto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE gasto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM producto_packaging WHERE gasto_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM gasto_vinculos WHERE gasto_id = ? OR ref_id = ?").bind(id, id));
   }
   if (table === "tandas") {
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE tanda_id = ?").bind(id));
@@ -312,6 +318,15 @@ async function setGastoTandas(db, gastoId, body) {
   return { ok: true };
 }
 
+// Compras (telas o moldes) a las que corresponde un envío.
+async function setGastoVinculos(db, gastoId, body) {
+  const ids = [...new Set((body.ref_ids || []).map(int))].filter((r) => r !== gastoId);
+  const stmts = [db.prepare("DELETE FROM gasto_vinculos WHERE gasto_id = ?").bind(gastoId)];
+  for (const r of ids) stmts.push(db.prepare("INSERT INTO gasto_vinculos (gasto_id, ref_id) VALUES (?, ?)").bind(gastoId, r));
+  await db.batch(stmts);
+  return { ok: true };
+}
+
 /* ---------------- Archivos (fotos y comprobantes) ---------------- */
 
 const MAX_FILE = 1_800_000; // D1 admite filas de hasta 2 MB
@@ -346,7 +361,7 @@ async function getFile(db, id, wantThumb) {
 
 const NOTION_CATS = [
   [/^muestra/i, "muestras"], [/^producc/i, "produccion"], [/^molder/i, "molderia"], [/contenido|campa/i, "campanas"],
-  [/^publicidad/i, "publicidad"], [/^suscrip/i, "suscripciones"], [/^env[ií]o/i, "envios"], [/^equipa/i, "equipamiento"],
+  [/^publicidad/i, "publicidad"], [/^suscrip/i, "suscripciones"], [/^env[ií]o|posventa/i, "posventa"], [/^equipa/i, "equipamiento"],
   [/^comisi/i, "comisiones"], [/^administ/i, "administracion"], [/^packag/i, "packaging"],
 ];
 

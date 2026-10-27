@@ -1,5 +1,8 @@
 // Carga y edición de un gasto: Monto → categoría → selección → detalle → guardar.
-import { CATEGORIAS, CAT, pagoInfo, tandaLabel, tandaColeccionId, unidades, esTela, esEstampa, ESTAMPA } from "./calc.js";
+import {
+  CATEGORIAS, CAT, MENU_CARGA, ENVIO, ENVIO_TXT, pagoInfo, tandaColeccionId, unidades, esTela, esEstampa, esMolde, ESTAMPA,
+  envioPorCompra, destinoTexto, primeraTanda,
+} from "./calc.js";
 import {
   icon, esc, $, $$, money, parseAmount, liveFormat, centsToInput, today, fmtDate, api, toast, sheet, busy,
   uploadFile, fileUrl, plural, promptSheet, parseKg, fmtKg, fmtInt,
@@ -19,7 +22,7 @@ const STAMP_OPC = [["bordado", "Bordado"], ["serigrafia", "Serigrafía"], ["dtf"
 const DESC_EJ = {
   muestras: "Ej.: Segunda prueba de talle", produccion: "Ej.: Tela rústica negra 40 m", molderia: "Ej.: Moldes y progresión de talles",
   campanas: "Ej.: Estudio medio día", publicidad: "Ej.: Instagram, 7 días", suscripciones: "Ej.: Plan mensual",
-  envios: "Ej.: Cambio de talle a Córdoba", equipamiento: "Ej.: Plancha industrial", comisiones: "Ej.: Comisión Mercado Pago",
+  posventa: "Ej.: Cambio de talle a Córdoba", equipamiento: "Ej.: Plancha industrial", comisiones: "Ej.: Comisión Mercado Pago",
   administracion: "Ej.: Monotributo octubre", packaging: "Ej.: Etiquetas tejidas con logo",
 };
 
@@ -47,19 +50,27 @@ export function openCarga(ctx, gasto = null, preset = {}) {
 
   const I = () => ctx.I();
   const cat = () => CAT[st.categoria];
-  // Publicidad repartida entre varios productos: se guardan las tandas elegidas aparte.
-  if (editing) st.multi = I().tandasDeGasto.get(gasto.id)?.slice() || null;
+  // Publicidad o moldería repartida entre varios productos: se guardan las tandas elegidas aparte.
+  // Envío vinculado a compras de tela o moldería: se guardan esas compras.
+  if (editing) {
+    st.multi = I().tandasDeGasto.get(gasto.id)?.slice() || null;
+    const refs = I().vinculosDe.get(gasto.id);
+    st.vinc = refs ? new Set(refs.map((r) => r.id)) : null;
+  }
 
   function clearDestino() {
-    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg", "multi", "sel"]) st[k] = null;
+    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg", "multi", "sel", "vinc"]) st[k] = null;
   }
 
   function crumbs() {
     const items = [];
     if (st.monto) items.push(["monto", money(st.monto, st.moneda)]);
-    if (st.categoria) items.push(["monto", cat()?.corto || cat()?.nombre]);
+    if (st.envio) {
+      items.push(["envio", ENVIO[st.envio]]);
+      if (st.concepto) items.push(["envioConc", st.concepto]);
+    } else if (st.categoria) items.push([CAT[st.categoria]?.otros ? "otros" : "monto", cat()?.corto || cat()?.nombre]);
     const dest = destinoNombre();
-    if (dest) items.push(["destino", dest]);
+    if (dest) items.push([st.vinc?.size ? "vinculos" : "destino", dest]);
     if (st.tanda_id && cat()?.tanda) {
       const t = I().tanda.get(st.tanda_id);
       if (t && (I().tandasDeProducto.get(t.producto_id) || []).length > 1) items.push(["tanda", t.nombre]);
@@ -69,6 +80,12 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   }
   function destinoNombre() {
     const i = I();
+    if (st.vinc?.size) {
+      const tipo = esTela(st.concepto) ? ["tela", "telas"] : ["moldería", "molderías"];
+      if (st.vinc.size > 1) return `${st.vinc.size} ${tipo[1]}`;
+      const r = i.gasto.get([...st.vinc][0]);
+      return (r?.descripcion || "").trim() || `1 ${tipo[0]}`;
+    }
     if (st.multi?.length) return `${st.multi.length} productos`;
     if (st.muestra_id) return i.muestra.get(st.muestra_id)?.nombre;
     if (st.producto_id) return i.producto.get(st.producto_id)?.nombre;
@@ -83,6 +100,10 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   function render() {
     foot.parentElement.hidden = false;
     if (st.step === "monto") renderMonto();
+    else if (st.step === "envio") renderEnvio();
+    else if (st.step === "envioConc") renderEnvioConc();
+    else if (st.step === "vinculos") renderVinculos();
+    else if (st.step === "otros") renderOtros();
     else if (st.step === "destino") renderDestino();
     else if (st.step === "tanda") renderTanda();
     else if (st.step === "detalle") renderDetalle();
@@ -104,8 +125,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       <div class="stack-sm">
         <div class="hero-label">¿En qué se gastó?</div>
         <div class="cat-grid">
-          ${CATEGORIAS.map((c, n) => `<button type="button" class="cat-btn" data-cat="${c.key}" ${st.categoria === c.key ? 'aria-pressed="true"' : ""}>
-            <span class="ico-box">${icon(c.icon)}</span><span>${esc(c.nombre)}</span></button>`).join("")}
+          ${MENU_CARGA.map((c) => `<button type="button" class="cat-btn" data-cat="${c.key}" ${elegida(c) ? 'aria-pressed="true"' : ""}>
+            <span class="ico-box">${icon(c.icon)}</span><span>${esc(c.nombre)}</span>${c.flujo ? icon("right", "chev") : ""}</button>`).join("")}
         </div>
       </div>`;
     foot.parentElement.hidden = true;
@@ -123,10 +144,130 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         return;
       }
       st.monto = m;
-      const keepDestino = st.categoria === b.dataset.cat && (destinoNombre() || !CAT[b.dataset.cat].destino);
-      if (!keepDestino) { clearDestino(); st.categoria = b.dataset.cat; }
+      const k = b.dataset.cat;
+      if (k === "envio") return go("envio");
+      if (k === "otros") return go("otros");
+      const keepDestino = !st.envio && st.categoria === k && (destinoNombre() || !CAT[k].destino);
+      if (!keepDestino) { clearDestino(); st.envio = null; st.categoria = k; }
       if (keepDestino || !cat().destino) go("detalle");
       else go("destino");
+    }));
+  }
+  function elegida(c) {
+    if (c.flujo === "envio") return !!st.envio;
+    if (c.flujo === "otros") return !st.envio && !!CAT[st.categoria]?.otros;
+    return !st.envio && st.categoria === c.key;
+  }
+
+  // Lista de filas para elegir una opción (tipo de envío, tipo de otro gasto…).
+  const opcionRows = (xs, attr) => `<div class="card flush"><ul class="list">${xs.map((x) => `<li data-name="${esc(x.nombre.toLowerCase())}">
+    <button type="button" class="row" data-${attr}="${esc(x.key)}" ${x.on ? 'aria-pressed="true"' : ""}>
+    ${x.icon ? `<span class="ico-box">${icon(x.icon)}</span>` : ""}<span class="row-main"><span class="row-title wrap">${esc(x.nombre)}</span>${x.sub ? `<span class="row-sub wrap">${esc(x.sub)}</span>` : ""}</span>
+    ${icon("right", "chev")}</button></li>`).join("")}</ul></div>`;
+
+  /* ---------- Envíos y cadetes: tipo → concepto → a qué compra, muestra, producto o campaña ---------- */
+  function renderEnvio() {
+    body.innerHTML = `${crumbs()}
+      <h3 class="h" style="margin:0;font-size:20px">¿Cómo se mandó?</h3>
+      ${opcionRows([["correo", "Correo", "mail"], ["expreso", "Expreso", "truck"], ["cadete", "Cadete", "bike"]]
+        .map(([key, nombre, ic]) => ({ key, nombre, icon: ic, on: st.envio === key })), "env")}
+      <p class="hint" style="margin:0">No es una categoría aparte: el envío se suma al concepto que elijas (tela, molde, corte…) en la muestra, producto o campaña que corresponda.</p>`;
+    foot.parentElement.hidden = true;
+    $$("[data-env]", body).forEach((b) => (b.onclick = () => {
+      if (st.envio !== b.dataset.env && !st.envio) { clearDestino(); st.categoria = null; }
+      st.envio = b.dataset.env;
+      go("envioConc");
+    }));
+  }
+
+  // Todos los conceptos juntos, por sección. Tela y moldería después preguntan qué compra/s; el resto, a qué destino.
+  function renderEnvioConc() {
+    const i = I();
+    const secciones = [
+      ["muestras", "Conceptos de muestras", "concepto_muestra"],
+      ["produccion", "Conceptos de producción", "concepto_prod"],
+      ["molderia", "Conceptos de moldería todos los talles", "concepto_molde"],
+      ["campanas", "Conceptos de campañas de contenido", "concepto_campana"],
+    ];
+    body.innerHTML = `${crumbs()}
+      <h3 class="h" style="margin:0;font-size:20px">¿${ENVIO_TXT[st.envio]} relacionado a qué?</h3>
+      <div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar concepto" aria-label="Buscar concepto" autocomplete="off"></div>
+      ${secciones.map(([catKey, titulo, tipo]) => {
+        const ops = i.D.opciones.filter((o) => o.tipo === tipo && !o.archivada);
+        if (!ops.length) return "";
+        return `<div class="stack-sm" data-sec><div class="hero-label">${esc(titulo)}</div>
+          ${opcionRows(ops.map((o) => ({ key: `${catKey}|${o.nombre}`, nombre: o.nombre, on: st.categoria === catKey && st.concepto === o.nombre,
+            sub: envioPorCompra(catKey, o.nombre) ? "Elegís la compra (una o varias)" : null })), "conc")}</div>`;
+      }).join("")}`;
+    foot.parentElement.hidden = true;
+    const q = $("#d-q", body);
+    q.oninput = () => {
+      const v = q.value.trim().toLowerCase();
+      $$("li[data-name]", body).forEach((li) => (li.hidden = v && !li.dataset.name.includes(v)));
+      $$("[data-sec]", body).forEach((s) => (s.hidden = !$$("li[data-name]", s).some((li) => !li.hidden)));
+    };
+    $$("[data-conc]", body).forEach((b) => (b.onclick = () => {
+      const [catKey, concepto] = b.dataset.conc.split(/\|(.*)/s);
+      const mismo = st.categoria === catKey && st.concepto === concepto && (destinoNombre() || st.vinc?.size);
+      if (!mismo) { clearDestino(); st.categoria = catKey; st.concepto = concepto; }
+      if (mismo) return go("detalle");
+      go(envioPorCompra(catKey, concepto) ? "vinculos" : "destino");
+    }));
+  }
+
+  // Compras de tela o moldería, de la más nueva a la más vieja. Con varias, el envío se reparte por lo que costó cada una.
+  function comprasParaEnvio() {
+    return I().D.gastos.filter((g) => !g.envio && g.categoria === st.categoria &&
+      (st.categoria === "molderia" || (esTela(st.concepto) ? esTela(g.concepto) : esMolde(g.concepto))))
+      .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id);
+  }
+  function renderVinculos() {
+    const i = I();
+    const tela = esTela(st.concepto);
+    const compras = comprasParaEnvio();
+    if (!st.vinc) st.vinc = new Set();
+    body.innerHTML = `${crumbs()}
+      <h3 class="h" style="margin:0;font-size:20px">¿${ENVIO_TXT[st.envio]} relacionado a qué ${tela ? "tela/s" : "moldería/s"}?</h3>
+      ${compras.length ? `${compras.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
+      <div class="card flush"><ul class="list">${compras.map((g) => `<li data-name="${esc(((g.descripcion || "") + " " + (destinoTexto(i, g) || "")).toLowerCase())}">
+        <button type="button" class="row" data-toggle="${g.id}" aria-pressed="${st.vinc.has(g.id)}">
+        <span class="row-main"><span class="row-title wrap">${esc((g.descripcion || "").trim() || g.concepto || "Sin descripción")}</span>
+        <span class="row-sub wrap">${esc([destinoTexto(i, g), fmtDate(g.fecha)].filter(Boolean).join(" · "))}</span></span>
+        <span class="row-end"><b class="money">${money(g.monto, g.moneda)}</b></span>
+        <span class="check" aria-hidden="true">${icon("check", "sm")}</span></button></li>`).join("")}</ul></div>`
+      : `<div class="note">${icon("alert", "sm")}<span>Todavía no hay compras de ${tela ? "tela" : "moldería"} ${st.categoria === "muestras" ? "de muestras" : st.categoria === "produccion" ? "de producción" : ""} cargadas. Podés elegir directamente a qué ${st.categoria === "muestras" ? "muestra" : "producto"} va el envío.</span></div>
+        <button type="button" class="btn secondary block" id="v-dest">Elegir ${st.categoria === "muestras" ? "muestra" : "producto"}</button>`}`;
+    foot.parentElement.hidden = !compras.length;
+    const seguir = () => {
+      const n = st.vinc.size;
+      foot.innerHTML = `<button class="btn block" id="v-next" ${n ? "" : "disabled"}>${n ? `Seguir con ${n === 1 ? "1 compra" : `${n} compras`}` : "Elegí una o varias"}</button>
+        ${n > 1 ? `<p class="hint" style="margin:8px 0 0;text-align:center">El envío se reparte según lo que costó cada una.</p>` : ""}`;
+      $("#v-next", foot).onclick = () => go("detalle");
+    };
+    if (compras.length) seguir();
+    $$("[data-toggle]", body).forEach((b) => (b.onclick = () => {
+      const id = Number(b.dataset.toggle);
+      st.vinc.has(id) ? st.vinc.delete(id) : st.vinc.add(id);
+      b.setAttribute("aria-pressed", String(st.vinc.has(id)));
+      seguir();
+    }));
+    const q = $("#d-q", body);
+    if (q) q.oninput = () => {
+      const v = q.value.trim().toLowerCase();
+      $$("li[data-name]", body).forEach((li) => (li.hidden = v && !li.dataset.name.includes(v)));
+    };
+    $("#v-dest", body)?.addEventListener("click", () => { st.vinc = null; go("destino"); });
+  }
+
+  /* ---------- Otros gastos: postventa, comisiones y cobros, administración e impuestos ---------- */
+  function renderOtros() {
+    body.innerHTML = `${crumbs()}
+      <h3 class="h" style="margin:0;font-size:20px">¿Qué tipo de gasto?</h3>
+      ${opcionRows(CATEGORIAS.filter((c) => c.otros).map((c) => ({ key: c.key, nombre: c.nombre, icon: c.icon, on: !st.envio && st.categoria === c.key })), "otro")}`;
+    foot.parentElement.hidden = true;
+    $$("[data-otro]", body).forEach((b) => (b.onclick = () => {
+      if (st.envio || st.categoria !== b.dataset.otro) { clearDestino(); st.envio = null; st.categoria = b.dataset.otro; }
+      go("detalle");
     }));
   }
 
@@ -159,15 +300,15 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const items = listItems();
     const needsCol = c.destino === "producto" || c.destino === "campana";
     const cols = c.coleccion ? coleccionItems() : [];
-    // Con colección (publicidad) se pueden elegir uno o varios productos.
-    const multi = !!c.coleccion;
+    // Publicidad y moldería se pueden cargar a uno o varios productos (en un envío, a uno solo).
+    const multi = !!c.multi && !st.envio;
     if (multi && !st.sel) {
       const i = I();
       st.sel = new Set(st.multi?.length ? st.multi.map((id) => i.tanda.get(id)?.producto_id).filter(Boolean) : st.producto_id ? [st.producto_id] : []);
     }
     body.innerHTML = `
       ${crumbs()}
-      <h3 class="h" style="margin:0;font-size:20px">${multi ? "¿Qué producto/s o colección?" : txt.titulo}</h3>
+      <h3 class="h" style="margin:0;font-size:20px">${multi ? (c.coleccion ? "¿Qué producto/s o colección?" : "¿Qué producto/s?") : txt.titulo}</h3>
       ${items.length + cols.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
       ${multi ? `<div class="hero-label" style="margin-bottom:-8px">Uno o varios productos</div>` : ""}
       <div class="card flush">
@@ -205,9 +346,13 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         const ids = [...st.sel];
         if (ids.length === 1) return pick(ids[0]);
         const i = I();
+        const concepto = st.concepto;
         clearDestino();
-        // De cada producto se usa la tanda abierta más reciente (o la última, si están todas cerradas).
+        st.concepto = concepto;
+        // Publicidad: de cada producto, la tanda abierta más reciente (o la última, si están todas cerradas).
+        // Moldería: es desarrollo, va a la primera tanda de cada producto.
         st.multi = ids.map((pid) => {
+          if (c.key === "molderia") return primeraTanda(i, pid)?.id;
           const ts = (i.tandasDeProducto.get(pid) || []).slice().sort((a, b) => b.id - a.id);
           return (ts.find((t) => !t.cerrada) || ts[0])?.id;
         }).filter(Boolean);
@@ -231,7 +376,9 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       $$("li[data-name]", body).forEach((li) => (li.hidden = v && !li.dataset.name.includes(v)));
     };
     $$("[data-pickcol]", body).forEach((b) => (b.onclick = () => {
+      const concepto = st.concepto;
       clearDestino();
+      st.concepto = concepto;
       st.coleccion_id = Number(b.dataset.pickcol);
       go("detalle");
     }));
@@ -302,7 +449,9 @@ export function openCarga(ctx, gasto = null, preset = {}) {
 
   function pick(id) {
     const c = cat();
+    const concepto = st.envio ? st.concepto : null; // en un envío el concepto ya se eligió antes
     clearDestino();
+    st.concepto = concepto;
     if (c.destino === "muestra") st.muestra_id = id;
     else if (c.destino === "campana") st.campana_id = id;
     else if (c.destino === "opcion") st.opcion_id = id;
@@ -345,7 +494,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const c = cat();
     const i = I();
     const medios = i.D.opciones.filter((o) => o.tipo === "medio_pago" && !o.archivada);
-    const conceptos = c?.conceptos ? i.D.opciones.filter((o) => o.tipo === c.conceptos && !o.archivada) : [];
+    // En un envío el concepto ya se eligió en el paso anterior.
+    const conceptos = c?.conceptos && !st.envio ? i.D.opciones.filter((o) => o.tipo === c.conceptos && !o.archivada) : [];
     const pago = editing ? pagoInfo(i, gasto) : null;
     const tanda = st.tanda_id ? i.tanda.get(st.tanda_id) : null;
 
@@ -486,6 +636,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   const stampBase = () => (st.estampa?.startsWith("serigrafia") ? "serigrafia" : st.estampa || null);
   // Con serigrafía hecha por uno mismo, cada compra se describe (tinta, shablón, emulsión…).
   function descTxt() {
+    if (st.envio) return [`Descripción del ${ENVIO_TXT[st.envio].toLowerCase()}`, st.envio === "cadete" ? "Ej.: Cadete a la tejeduría" : "Ej.: Envío de la tela desde Buenos Aires"];
     if (esEstampa(st.concepto) && st.estampa === "serigrafia_propia") return ["¿Qué compraste para estampar?", "Ej.: Tinta plastisol blanca 1 kg"];
     return ["Descripción", DESC_EJ[st.categoria] || ""];
   }
@@ -537,7 +688,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const payload = {
       fecha: st.fecha, monto: st.monto, moneda: st.moneda, categoria: st.categoria,
       muestra_id: st.muestra_id, producto_id: st.producto_id, tanda_id: st.tanda_id, campana_id: st.campana_id, opcion_id: st.opcion_id,
-      coleccion_id: st.coleccion_id, kg: esTela(st.concepto) ? st.kg : null, estampa: esEstampa(st.concepto) ? st.estampa || null : null, concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
+      coleccion_id: st.coleccion_id, kg: esTela(st.concepto) && !st.envio ? st.kg : null, estampa: esEstampa(st.concepto) && !st.envio ? st.estampa || null : null,
+      envio: st.envio || null, concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
       comprobante_id: st.comprobante_id, cantidad: st.categoria === "packaging" ? st.cantidad : null,
       cubre_meses: st.categoria === "suscripciones" ? st.cubre_meses || 1 : null, estimado: st.estimado, en_cantidad: st.en_cantidad,
     };
@@ -552,6 +704,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         ? await api(`gastos/${gasto.id}`, { method: "PATCH", body: payload })
         : await api("gastos", { method: "POST", body: payload });
       if (st.multi?.length || gasto?._multi) await api(`gastos/${saved.id}/tandas`, { method: "PUT", body: { tanda_ids: st.multi || [] } });
+      const vinc = st.envio && st.vinc?.size ? [...st.vinc] : [];
+      if (vinc.length || gasto?._vinc) await api(`gastos/${saved.id}/vinculos`, { method: "PUT", body: { ref_ids: vinc } });
       try { if (st.medio_pago) localStorage.setItem(LAST_MEDIO, st.medio_pago); } catch {}
       await ctx.reload();
     }).catch(() => null);
@@ -567,13 +721,13 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       <div class="ok-circle">${icon("check")}</div>
       <h3 style="margin:8px 0 0;font-size:22px">Gasto guardado</h3>
       <div class="hero-value money" style="font-size:32px">${money(st.monto, st.moneda)}</div>
-      <div class="muted">${esc([c?.nombre, destinoNombre(), st.concepto, esEstampa(st.concepto) && ESTAMPA[st.estampa]].filter(Boolean).join(" · "))}</div>
+      <div class="muted">${esc([st.envio ? ENVIO[st.envio] : c?.nombre, destinoNombre(), st.concepto, esEstampa(st.concepto) && ESTAMPA[st.estampa]].filter(Boolean).join(" · "))}</div>
       <div class="muted small">${esc(fmtDate(st.fecha))}${st.estadoPago !== "pagado" ? ` · ${st.estadoPago === "parcial" ? "Pago parcial" : "Pendiente de pago"}` : ""}</div>
     </div>`;
     foot.innerHTML = `<div class="btn-row"><button class="btn secondary" id="l-ok">Listo</button><button class="btn" id="l-otro">${icon("plus")} Cargar otro</button></div>`;
     $("#l-ok", foot).onclick = () => sh.close();
     $("#l-otro", foot).onclick = () => {
-      const keep = { fecha: st.fecha, medio_pago: st.medio_pago, moneda: st.moneda };
+      const keep = { fecha: st.fecha, medio_pago: st.medio_pago, moneda: st.moneda, envio: null };
       for (const k of Object.keys(st)) delete st[k];
       Object.assign(st, { monto: null, categoria: null, estadoPago: "pagado", estimado: 0, en_cantidad: 0, cubre_meses: 1, ...keep });
       saved = null;

@@ -40,6 +40,10 @@ const P = {
   link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
   wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
   check_circle: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  rotate: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  mail: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+  bike: '<circle cx="18.5" cy="17.5" r="3.5"/><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="15" cy="5" r="1"/><path d="M12 17.5V14l-3-3 4-3 2 3h2"/>',
 };
 
 export function icon(name, cls = "") {
@@ -262,6 +266,81 @@ export async function uploadFile(file, { photo = false } = {}) {
     form.append("file", file, file.name);
   }
   return api("archivos", { method: "POST", form });
+}
+
+// Encuadre cuadrado antes de subir una foto: se arrastra para centrarla y se acerca con dos dedos o con la barra.
+// Devuelve la foto recortada (File) o null si se cancela.
+export function cropSquare(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    let done = false;
+    sheet({
+      title: "Encuadrar foto",
+      full: true,
+      foot: true,
+      onClose: () => { URL.revokeObjectURL(url); if (!done) resolve(null); },
+      render: ({ body, foot, close }) => {
+        body.innerHTML = `<p class="hint" style="margin:0">Arrastrá la foto para centrarla. Para acercar, usá dos dedos o la barra.</p>
+          <div class="crop" id="cr"><img id="cr-img" alt="Foto para encuadrar" draggable="false"></div>
+          <div class="field"><label for="cr-z">Acercar</label><input id="cr-z" class="range" type="range" min="1" max="4" step="0.01" value="1"></div>`;
+        foot.innerHTML = `<div class="btn-row"><button class="btn secondary" data-no>Cancelar</button><button class="btn" data-ok disabled>${icon("check")} Usar foto</button></div>`;
+        const box = body.querySelector("#cr"), img = body.querySelector("#cr-img"), zoom = body.querySelector("#cr-z");
+        const ok = foot.querySelector("[data-ok]");
+        let W = 0, H = 0, base = 1, z = 1, x = 0, y = 0; // x, y: corrimiento del centro de la foto, en px de pantalla
+        const F = () => box.clientWidth;
+        const draw = () => {
+          const s = base * z, mx = Math.max(0, (W * s - F()) / 2), my = Math.max(0, (H * s - F()) / 2);
+          x = Math.min(mx, Math.max(-mx, x)); y = Math.min(my, Math.max(-my, y));
+          img.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(${z})`;
+        };
+        const setZoom = (nz) => { const k = Math.min(4, Math.max(1, nz)); x *= k / z; y *= k / z; z = k; zoom.value = String(z); draw(); };
+        img.onload = () => {
+          W = img.naturalWidth; H = img.naturalHeight;
+          base = F() / Math.min(W, H); // la foto siempre cubre todo el cuadrado
+          img.style.width = `${W * base}px`; img.style.height = `${H * base}px`;
+          ok.disabled = false;
+          draw();
+        };
+        img.onerror = () => { toast("No se pudo leer la foto", true); close(); };
+        img.src = url;
+        zoom.oninput = () => setZoom(Number(zoom.value));
+
+        // Arrastrar con un dedo; con dos, acercar o alejar.
+        const pts = new Map();
+        let last = null;
+        const gesto = () => {
+          const [a, b] = [...pts.values()];
+          return b ? { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) } : { cx: a.x, cy: a.y, d: 0 };
+        };
+        box.onpointerdown = (e) => { box.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); last = gesto(); };
+        box.onpointermove = (e) => {
+          if (!pts.has(e.pointerId)) return;
+          pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          const g = gesto();
+          x += g.cx - last.cx; y += g.cy - last.cy;
+          if (g.d && last.d) setZoom(z * (g.d / last.d)); else draw();
+          last = g;
+        };
+        box.onpointerup = box.onpointercancel = (e) => { pts.delete(e.pointerId); last = pts.size ? gesto() : null; };
+
+        foot.querySelector("[data-no]").onclick = close;
+        ok.onclick = () => {
+          const s = base * z, lado = F() / s;
+          const sx = W / 2 - x / s - lado / 2, sy = H / 2 - y / s - lado / 2;
+          const out = Math.min(1200, Math.round(lado));
+          const c = document.createElement("canvas");
+          c.width = c.height = out;
+          c.getContext("2d").drawImage(img, sx, sy, lado, lado, 0, 0, out, out);
+          c.toBlob((blob) => {
+            if (!blob) return toast("No se pudo recortar la foto", true);
+            done = true;
+            resolve(new File([blob], "foto.jpg", { type: "image/jpeg" }));
+            close();
+          }, "image/jpeg", 0.9);
+        };
+      },
+    });
+  });
 }
 
 export const fileUrl = (id, thumb = false) => `/api/archivos/${id}${thumb ? "?thumb=1" : ""}`;

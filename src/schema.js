@@ -1,7 +1,7 @@
 // Estructura de la base. Se aplica sola la primera vez que el Worker recibe un pedido.
 // Si más adelante cambia, subir SCHEMA_VERSION y agregar las sentencias nuevas al final de MIGRATIONS.
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const MIGRATIONS = {
   1: [
@@ -150,6 +150,19 @@ export const MIGRATIONS = {
     `ALTER TABLE muestras ADD COLUMN no_produce INTEGER NOT NULL DEFAULT 0`,
     // Tipo de estampa: bordado | serigrafia (de un taller) | serigrafia_propia (estampada por uno) | dtf
     `ALTER TABLE gastos ADD COLUMN estampa TEXT`,
+  ],
+  5: [
+    // Envíos y cadetes: tipo de envío (correo | expreso | cadete). El gasto toma la categoría y el concepto de lo que se mandó.
+    `ALTER TABLE gastos ADD COLUMN envio TEXT`,
+    // Envío vinculado a una o varias compras de tela o moldería: se reparte según lo que costó cada una.
+    `CREATE TABLE IF NOT EXISTS gasto_vinculos (
+      gasto_id INTEGER NOT NULL REFERENCES gastos(id),
+      ref_id INTEGER NOT NULL REFERENCES gastos(id),
+      PRIMARY KEY (gasto_id, ref_id)
+    )`,
+    // "Envíos y posventa" deja de existir: lo cargado ahí pasa a Postventa (dentro de Otros gastos).
+    `UPDATE gastos SET categoria = 'posventa' WHERE categoria = 'envios'`,
+    ...seed("concepto_molde", ["Moldería papel kraft", "Moldería papel"]),
   ],
 };
 

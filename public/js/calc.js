@@ -1,20 +1,44 @@
 // Reglas de cálculo. No toca la pantalla: recibe los datos y devuelve números verificables.
 // Los importes están en centavos y se agrupan por moneda ({ ARS: 123, USD: 4 }); nunca se suman monedas distintas.
 
+// multi: se puede cargar a varios productos a la vez (se reparte por unidades). otros: va dentro de "Otros gastos".
 export const CATEGORIAS = [
   { key: "muestras", nombre: "Muestras", destino: "muestra", conceptos: "concepto_muestra", icon: "scissors" },
   { key: "produccion", nombre: "Producción de ropa", destino: "producto", tanda: true, conceptos: "concepto_prod", icon: "shirt" },
-  { key: "molderia", nombre: "Moldería", destino: "producto", icon: "ruler" },
+  { key: "molderia", nombre: "Moldería todos los talles", destino: "producto", multi: true, conceptos: "concepto_molde", icon: "ruler" },
   { key: "campanas", nombre: "Campañas de contenido de colecciones", corto: "Campañas de contenido", destino: "campana", conceptos: "concepto_campana", icon: "camera" },
-  { key: "publicidad", nombre: "Publicidad", destino: "producto", tanda: true, coleccion: true, icon: "megaphone" },
+  { key: "publicidad", nombre: "Publicidad", destino: "producto", tanda: true, multi: true, coleccion: true, icon: "megaphone" },
   { key: "suscripciones", nombre: "Suscripciones y fijos", destino: "opcion", opcionTipo: "suscripcion", general: true, icon: "repeat" },
-  { key: "envios", nombre: "Envíos y posventa", general: true, icon: "truck" },
   { key: "equipamiento", nombre: "Equipamiento", general: true, icon: "wrench" },
-  { key: "comisiones", nombre: "Comisiones y cobros", general: true, icon: "percent" },
-  { key: "administracion", nombre: "Administración e impuestos", general: true, icon: "landmark" },
   { key: "packaging", nombre: "Packaging y presentación", destino: "opcion", opcionTipo: "packaging", general: true, icon: "package" },
+  { key: "posventa", nombre: "Postventa", general: true, otros: true, icon: "rotate" },
+  { key: "comisiones", nombre: "Comisiones y cobros", general: true, otros: true, icon: "percent" },
+  { key: "administracion", nombre: "Administración e impuestos", general: true, otros: true, icon: "landmark" },
 ];
 export const CAT = Object.fromEntries(CATEGORIAS.map((c) => [c.key, c]));
+
+// Botones al cargar un gasto. "Envíos y cadetes" y "Otros gastos" abren un paso más antes de elegir.
+export const MENU_CARGA = [
+  ...["muestras", "produccion", "molderia", "campanas", "publicidad", "suscripciones", "equipamiento"].map((k) => CAT[k]),
+  { key: "envio", nombre: "Envíos y cadetes", icon: "truck", flujo: "envio" },
+  CAT.packaging,
+  { key: "otros", nombre: "Otros gastos", icon: "more", flujo: "otros" },
+];
+
+// Un envío no es una categoría: se suma al concepto (tela, molde, corte…) al que corresponde.
+export const ENVIO = { correo: "Correo", expreso: "Expreso", cadete: "Cadete" };
+export const ENVIO_TXT = { correo: "Envío", expreso: "Expreso", cadete: "Cadete" };
+// Con tela y moldería el envío se elige por compra (una o varias) y se reparte según lo que costó cada una.
+export const esMolde = (concepto) => /^molde/i.test(concepto || "");
+export const envioPorCompra = (categoria, concepto) =>
+  categoria === "molderia" || ((categoria === "produccion" || categoria === "muestras") && esTela(concepto)) || (categoria === "muestras" && esMolde(concepto));
+
+// Preparación hasta la primera compra de tela de producción; producción después; finalizada al marcarla revisada y cerrada.
+export const ESTADO_PROD = { preparacion: "En preparación", produccion: "En producción", finalizada: "Producción finalizada" };
+export function estadoProduccion(I, t) {
+  if (t.cerrada) return "finalizada";
+  return (I.gastosDeTanda.get(t.id) || []).some((g) => g.categoria === "produccion" && esTela(g.concepto)) ? "produccion" : "preparacion";
+}
 
 /* ---------- Dinero por moneda ---------- */
 
@@ -37,43 +61,67 @@ export function index(D) {
     for (const x of arr) { const k = x[key]; if (k == null) continue; if (!m.has(k)) m.set(k, []); m.get(k).push(x); }
     return m;
   };
+  const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
+  const gasto = by(D.gastos);
+
+  // Publicidad o moldería cargada a varios productos: el gasto queda sin tanda propia y se reparte entre las suyas.
+  const tandasDeGasto = new Map();
+  for (const gt of D.gastoTandas || []) push(tandasDeGasto, gt.gasto_id, gt.tanda_id);
+  for (const [id, ts] of tandasDeGasto) { const g = gasto.get(id); if (g) { g._multi = true; g._tandas = ts; } }
+
+  // Envío vinculado a una o varias compras (telas o moldes): se parte según lo que costó cada compra
+  // y cada parte se suma donde está esa compra, con su mismo concepto.
+  const vinculosDe = new Map(), enviosDe = new Map(), partesDe = new Map();
+  for (const v of D.gastoVinculos || []) {
+    const ref = gasto.get(v.ref_id), g = gasto.get(v.gasto_id);
+    if (!ref || !g) continue;
+    push(vinculosDe, g.id, ref);
+    push(enviosDe, ref.id, g);
+  }
+  for (const [id, refs] of vinculosDe) {
+    const g = gasto.get(id);
+    g._vinc = true;
+    const split = splitByUnits(g.monto, refs.map((r) => r.monto));
+    partesDe.set(id, refs.map((r, i) => ({
+      ...g, monto: split[i], categoria: r.categoria, tanda_id: r.tanda_id ?? null, producto_id: r.producto_id ?? null,
+      muestra_id: r.muestra_id ?? null, campana_id: null, coleccion_id: null, opcion_id: null,
+      _parte: true, _vid: `${g.id}-${r.id}`, _ref: r, _tandas: r._tandas || null, _multi: !!r._tandas,
+    })));
+  }
+  // Lista de gastos con cada envío vinculado reemplazado por sus partes. Es la que usan los cálculos por destino.
+  const gastos = D.gastos.flatMap((g) => partesDe.get(g.id) || [g]);
+
   const I = {
-    D,
-    gasto: by(D.gastos), producto: by(D.productos), tanda: by(D.tandas), muestra: by(D.muestras),
+    D, gastos,
+    gasto, producto: by(D.productos), tanda: by(D.tandas), muestra: by(D.muestras),
     campana: by(D.campanas), coleccion: by(D.colecciones), opcion: by(D.opciones),
     pagosDe: group(D.pagos, "gasto_id"),
-    gastosDeTanda: group(D.gastos, "tanda_id"),
-    gastosDeProducto: group(D.gastos, "producto_id"),
-    gastosDeMuestra: group(D.gastos, "muestra_id"),
-    gastosDeCampana: group(D.gastos, "campana_id"),
-    gastosDeOpcion: group(D.gastos, "opcion_id"),
-    gastosDeColeccion: group(D.gastos, "coleccion_id"),
+    gastosDeTanda: group(gastos, "tanda_id"),
+    gastosDeProducto: group(gastos, "producto_id"),
+    gastosDeMuestra: group(gastos, "muestra_id"),
+    gastosDeCampana: group(gastos, "campana_id"),
+    gastosDeOpcion: group(gastos, "opcion_id"),
+    gastosDeColeccion: group(gastos, "coleccion_id"),
     tandasDeProducto: group(D.tandas, "producto_id"),
     muestrasDeProducto: group(D.muestras, "producto_id"),
     noAplica: new Set(D.tandaConceptos.filter((c) => c.estado === "no_aplica").map((c) => `${c.tanda_id}|${c.concepto}`)),
     tandasDeCampana: new Map(), campanasDeTanda: new Map(),
-    tandasDeGasto: new Map(), gastosDeTandaMulti: new Map(),
+    tandasDeGasto, vinculosDe, enviosDe, partesDe,
+    multiDeTanda: new Map(),
     packagingDeProducto: group(D.productoPackaging || [], "producto_id"),
   };
   for (const ct of D.campanaTandas) {
-    if (!I.tandasDeCampana.has(ct.campana_id)) I.tandasDeCampana.set(ct.campana_id, []);
-    I.tandasDeCampana.get(ct.campana_id).push(ct.tanda_id);
-    if (!I.campanasDeTanda.has(ct.tanda_id)) I.campanasDeTanda.set(ct.tanda_id, []);
-    I.campanasDeTanda.get(ct.tanda_id).push(ct.campana_id);
+    push(I.tandasDeCampana, ct.campana_id, ct.tanda_id);
+    push(I.campanasDeTanda, ct.tanda_id, ct.campana_id);
   }
-  // Publicidad cargada a varios productos: el gasto queda sin tanda propia y se reparte entre las suyas.
-  for (const gt of D.gastoTandas || []) {
-    if (!I.tandasDeGasto.has(gt.gasto_id)) I.tandasDeGasto.set(gt.gasto_id, []);
-    I.tandasDeGasto.get(gt.gasto_id).push(gt.tanda_id);
-    if (!I.gastosDeTandaMulti.has(gt.tanda_id)) I.gastosDeTandaMulti.set(gt.tanda_id, []);
-    I.gastosDeTandaMulti.get(gt.tanda_id).push(gt.gasto_id);
-  }
-  for (const id of I.tandasDeGasto.keys()) { const g = I.gasto.get(id); if (g) g._multi = true; }
+  for (const g of gastos) for (const t of g._tandas || []) push(I.multiDeTanda, t, g);
   I.campaignCache = new Map();
   I.publiColCache = new Map();
-  I.publiMultiCache = new Map();
+  I.multiCache = new Map();
   return I;
 }
+
+const gkey = (g) => g._vid || g.id;
 
 /* ---------- Pagos ---------- */
 
@@ -100,10 +148,33 @@ export function primeraTanda(I, productoId) {
   return ts.reduce((min, t) => (!min || t.id < min.id ? t : min), null);
 }
 
+// Gastos de las muestras vinculadas al producto.
+export function gastosMuestras(I, productoId) {
+  return (I.muestrasDeProducto.get(productoId) || []).flatMap((m) => (I.gastosDeMuestra.get(m.id) || []).filter((g) => g.categoria === "muestras"));
+}
+
+// Moldería de todos los talles del producto: la propia entera y, si sirve para varios productos,
+// la parte que le toca según sus unidades (las de su primera tanda) contra las de los demás.
+export function moldesDeProducto(I, productoId, tandaId) {
+  const propios = (I.gastosDeProducto.get(productoId) || []).filter((g) => g.categoria === "molderia" && !g._tandas)
+    .map((g) => ({ gasto: g, monto: M.of(g.moneda, g.monto), info: null }));
+  const compartidos = (I.multiDeTanda.get(tandaId) || []).filter((g) => g.categoria === "molderia").map((g) => {
+    const info = multiInfo(I, g);
+    return { gasto: g, monto: info.asignado.get(tandaId) || null, info };
+  });
+  return [...propios, ...compartidos];
+}
+
 export function gastosDesarrollo(I, productoId) {
-  const molde = (I.gastosDeProducto.get(productoId) || []).filter((g) => g.categoria === "molderia");
-  const muestras = (I.muestrasDeProducto.get(productoId) || []).flatMap((m) => (I.gastosDeMuestra.get(m.id) || []).filter((g) => g.categoria === "muestras"));
-  return [...muestras, ...molde];
+  const t = primeraTanda(I, productoId);
+  return [...gastosMuestras(I, productoId), ...(t ? moldesDeProducto(I, productoId, t.id).map((x) => x.gasto) : [])];
+}
+
+// La compra de moldería a la que pertenece (un envío vinculado cuenta dentro del molde que mandó).
+export const moldeBase = (g) => (g._parte ? g._ref : g);
+export function moldeNombre(I, g) {
+  const m = moldeBase(g);
+  return (m.descripcion || "").trim() || `Moldería ${destinoTexto(I, m) || ""}`.trim();
 }
 
 /* ---------- Reparto de campañas ---------- */
@@ -141,15 +212,16 @@ export function publiColeccionInfo(I, coleccionId) {
   return info;
 }
 
-// Publicidad cargada a varios productos elegidos: se reparte entre las unidades de esas tandas.
-export function publiMultiInfo(I, gastoId) {
-  if (I.publiMultiCache.has(gastoId)) return I.publiMultiCache.get(gastoId);
-  const g = I.gasto.get(gastoId);
-  const tandas = (I.tandasDeGasto.get(gastoId) || []).map((id) => I.tanda.get(id));
-  const info = { id: gastoId, gasto: g, ...repartir(M.of(g.moneda, g.monto), tandas, [g]) };
-  I.publiMultiCache.set(gastoId, info);
+// Publicidad o moldería cargada a varios productos elegidos: se reparte entre las unidades de esas tandas.
+export function multiInfo(I, g) {
+  const k = gkey(g);
+  if (I.multiCache.has(k)) return I.multiCache.get(k);
+  const tandas = (g._tandas || []).map((id) => I.tanda.get(id));
+  const info = { id: k, gasto: g, ...repartir(M.of(g.moneda, g.monto), tandas, [g]) };
+  I.multiCache.set(k, info);
   return info;
 }
+export const publiMultiInfo = (I, gastoId) => multiInfo(I, I.gasto.get(gastoId));
 
 // Packaging vinculado al producto: precio por unidad de la compra × cuántos lleva cada prenda × unidades.
 export function packagingInfo(I, productoId, n) {
@@ -192,7 +264,9 @@ export function tandaCosts(I, tandaId) {
   const prod = propios.filter((g) => g.categoria === "produccion");
   const publi = propios.filter((g) => g.categoria === "publicidad");
   const esPrimera = primeraTanda(I, t.producto_id)?.id === t.id;
-  const desa = esPrimera ? gastosDesarrollo(I, t.producto_id) : [];
+  const muestrasG = esPrimera ? gastosMuestras(I, t.producto_id) : [];
+  const moldes = esPrimera ? moldesDeProducto(I, t.producto_id, tandaId) : [];
+  const desa = [...muestrasG, ...moldes.map((x) => x.gasto)];
 
   const campanas = (I.campanasDeTanda.get(tandaId) || []).map((cid) => {
     const c = campaignInfo(I, cid);
@@ -203,16 +277,20 @@ export function tandaCosts(I, tandaId) {
   const pc = colId != null ? publiColeccionInfo(I, colId) : null;
   const publiCol = pc && !M.isZero(pc.total) ? { coleccion: I.coleccion.get(colId), info: pc, monto: pc.asignado.get(tandaId) || null } : null;
 
-  const publiMulti = (I.gastosDeTandaMulti.get(tandaId) || []).map((gid) => {
-    const info = publiMultiInfo(I, gid);
-    return { gasto: info.gasto, info, monto: info.asignado.get(tandaId) || null };
+  const publiMulti = (I.multiDeTanda.get(tandaId) || []).filter((g) => g.categoria === "publicidad").map((g) => {
+    const info = multiInfo(I, g);
+    return { gasto: g, info, monto: info.asignado.get(tandaId) || null };
   });
+  const moldesMulti = moldes.filter((x) => x.info);
   const pack = packagingInfo(I, t.producto_id, u.n);
 
   const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
+  const moldeTotal = M.sum(moldes.map((x) => x.monto || {}));
   const lineas = {
     produccion: { total: tot(prod), gastos: prod },
-    desarrollo: { total: tot(desa), gastos: desa, aplica: esPrimera },
+    muestras: { total: tot(muestrasG), gastos: muestrasG, aplica: esPrimera },
+    molderia: { total: moldeTotal, items: moldes, aplica: esPrimera },
+    desarrollo: { total: M.add(tot(muestrasG), moldeTotal), gastos: desa, aplica: esPrimera },
     packaging: { total: M.sum(pack.map((x) => x.monto || {})), items: pack },
     campana: { total: M.sum(campanas.map((c) => c.monto || {})), campanas },
     publicidad: {
@@ -220,7 +298,7 @@ export function tandaCosts(I, tandaId) {
       gastos: publi, coleccion: publiCol, multi: publiMulti,
     },
   };
-  const fabricacion = M.sum([lineas.produccion.total, lineas.desarrollo.total, lineas.packaging.total]);
+  const fabricacion = M.sum([lineas.produccion.total, lineas.muestras.total, lineas.molderia.total, lineas.packaging.total]);
   const directo = M.sum([fabricacion, lineas.campana.total, lineas.publicidad.total]);
 
   // Conceptos de producción que todavía no tienen gasto ni están marcados "no aplica".
@@ -240,21 +318,23 @@ export function tandaCosts(I, tandaId) {
   for (const x of publiMulti) {
     if (x.info.estado === "falta_cantidad" && u.n != null) avisos.push(`Reparto de la publicidad “${x.gasto.descripcion || "sin descripción"}” pendiente: falta cantidad en otro producto`);
   }
+  for (const x of moldesMulti) {
+    if (x.info.estado === "falta_cantidad" && u.n != null) avisos.push(`Reparto de la moldería “${(x.gasto.descripcion || "").trim() || "sin descripción"}” pendiente: falta cantidad en otro producto`);
+  }
   for (const x of pack) {
     if (x.unit == null) avisos.push(`Packaging ${x.opcion?.nombre || ""}: la compra no tiene la cantidad de unidades`);
   }
-  const hayEstimados = u.estimada || [...prod, ...desa, ...publi].some((g) => g.estimado) || campanas.some((c) => c.info.estado === "estimado") ||
-    publiCol?.info.estado === "estimado" || publiMulti.some((x) => x.info.estado === "estimado");
+  const repartos = [...campanas, ...(publiCol ? [publiCol] : []), ...publiMulti, ...moldesMulti].map((x) => x.info.estado);
+  const hayEstimados = u.estimada || [...prod, ...desa, ...publi].some((g) => g.estimado) || repartos.includes("estimado");
 
   let estado;
   if (t.cerrada) estado = "cerrado";
-  else if (u.n == null || campanas.some((c) => c.info.estado === "falta_cantidad") || publiCol?.info.estado === "falta_cantidad" ||
-    publiMulti.some((x) => x.info.estado === "falta_cantidad")) estado = "incompleto";
+  else if (u.n == null || repartos.includes("falta_cantidad")) estado = "incompleto";
   else if (hayEstimados) estado = "estimado";
   else estado = "al_dia";
 
   return {
-    tanda: t, unidades: u, esPrimera, lineas, fabricacion, directo, estado, avisos, conceptosPendientes,
+    tanda: t, unidades: u, esPrimera, lineas, fabricacion, directo, estado, avisos, conceptosPendientes, estadoProd: estadoProduccion(I, t),
     tela: telaInfo(prod, u.n),
     porUnidad: (m) => (u.n ? M.scale(m, 1 / u.n) : null),
   };
@@ -344,36 +424,65 @@ export function productoResumen(I, productoId) {
 
 /* ---------- Colección ---------- */
 
+// Junta importes por grupo (producto, muestra, molde o campaña) para poder desplegarlos.
+function grupos(items, grupo) {
+  const m = new Map();
+  for (const x of items) {
+    const gr = grupo(x);
+    if (!m.has(gr.key)) m.set(gr.key, { ...gr, items: [] });
+    m.get(gr.key).items.push(x);
+  }
+  return [...m.values()].map((x) => ({ ...x, total: M.sum(x.items.map((i) => i.monto)), gastos: x.items.map((i) => i.gasto) }))
+    .sort((a, b) => M.get(b.total) - M.get(a.total));
+}
+const item = (g) => ({ gasto: g, monto: M.of(g.moneda, g.monto) });
+
+// Lo pagado y pendiente de una parte de un gasto (por ejemplo, la parte de una moldería compartida).
+function pagoDeParte(I, g, m) {
+  const real = I.gasto.get(g.id) || g;
+  const p = pagoInfo(I, real);
+  const f = real.monto ? M.get(m, real.moneda) / real.monto : 0;
+  return { pagado: M.of(real.moneda, Math.round(p.pagado * f)), pendiente: M.of(real.moneda, Math.round(p.pendiente * f)) };
+}
+
 export function coleccionCosts(I, coleccionId) {
   const tandas = I.D.tandas.filter((t) => tandaColeccionId(I, t) === coleccionId);
   const tandaSet = new Set(tandas.map((t) => t.id));
   const seen = new Set();
-  const take = (gs) => gs.filter((g) => !seen.has(g.id) && seen.add(g.id));
+  const take = (gs) => gs.filter((g) => !seen.has(gkey(g)) && seen.add(gkey(g)));
 
-  const prod = take(I.D.gastos.filter((g) => g.categoria === "produccion" && tandaSet.has(g.tanda_id)));
-  const publi = take(I.D.gastos.filter((g) => g.categoria === "publicidad" &&
-    (tandaSet.has(g.tanda_id) || (!g.tanda_id && g.coleccion_id === coleccionId) ||
-      (I.tandasDeGasto.get(g.id) || []).some((id) => tandaSet.has(id)))));
+  const prod = take(I.gastos.filter((g) => g.categoria === "produccion" && tandaSet.has(g.tanda_id))).map(item);
+  const publi = take(I.gastos.filter((g) => g.categoria === "publicidad" &&
+    (tandaSet.has(g.tanda_id) || (!g.tanda_id && g.coleccion_id === coleccionId) || (g._tandas || []).some((id) => tandaSet.has(id))))).map(item);
   const productos = [...new Set(tandas.map((t) => t.producto_id))];
-  const desa = take(productos.filter((pid) => tandaSet.has(primeraTanda(I, pid)?.id)).flatMap((pid) => gastosDesarrollo(I, pid)));
+  // El desarrollo se cuenta en la colección de la primera tanda de cada producto.
+  const primeras = productos.map((pid) => primeraTanda(I, pid)).filter((t) => t && tandaSet.has(t.id));
+  const mues = take(primeras.flatMap((t) => gastosMuestras(I, t.producto_id))).map(item);
+  const moldes = primeras.flatMap((t) => moldesDeProducto(I, t.producto_id, t.id)).filter((x) => x.monto);
   const campanas = I.D.campanas.filter((c) => c.coleccion_id === coleccionId);
-  const camp = take(campanas.flatMap((c) => (I.gastosDeCampana.get(c.id) || []).filter((g) => g.categoria === "campanas")));
+  const camp = take(campanas.flatMap((c) => (I.gastosDeCampana.get(c.id) || []).filter((g) => g.categoria === "campanas"))).map(item);
 
-  const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
-  const todos = [...prod, ...desa, ...camp, ...publi];
-  const pagos = todos.map((g) => ({ g, p: pagoInfo(I, g) }));
+  const linea = (items, grupo) => ({ total: M.sum(items.map((x) => x.monto)), gastos: items.map((x) => x.gasto), items, grupos: grupo ? grupos(items, grupo) : null });
+  const L = {
+    produccion: linea(prod, (x) => {
+      const t = I.tanda.get(x.gasto.tanda_id), p = I.producto.get(t?.producto_id);
+      return { key: `t${t?.id}`, nombre: t ? tandaLabel(I, t) : "Producto", ruta: t ? `#/producto/${t.producto_id}?tanda=${t.id}` : null, foto: p?.foto_id };
+    }),
+    muestras: linea(mues, (x) => ({ key: `m${x.gasto.muestra_id}`, nombre: I.muestra.get(x.gasto.muestra_id)?.nombre || "Muestra", ruta: `#/muestra/${x.gasto.muestra_id}` })),
+    molderia: linea(moldes, (x) => ({ key: `mo${moldeBase(x.gasto).id}`, nombre: moldeNombre(I, x.gasto), ruta: `#/gasto/${moldeBase(x.gasto).id}` })),
+    campana: linea(camp, (x) => ({ key: `c${x.gasto.campana_id}`, nombre: I.campana.get(x.gasto.campana_id)?.nombre || "Campaña", ruta: `#/campana/${x.gasto.campana_id}` })),
+    publicidad: linea(publi),
+  };
+  L.desarrollo = { total: M.add(L.muestras.total, L.molderia.total), gastos: [...L.muestras.gastos, ...L.molderia.gastos] };
+  const fabricacion = M.sum([L.produccion.total, L.muestras.total, L.molderia.total]);
+  const todos = [...prod, ...mues, ...moldes, ...camp, ...publi];
+  const pagos = todos.map((x) => pagoDeParte(I, x.gasto, x.monto));
   return {
-    tandas, productos, campanas,
-    lineas: {
-      produccion: { total: tot(prod), gastos: prod },
-      desarrollo: { total: tot(desa), gastos: desa },
-      campana: { total: tot(camp), gastos: camp },
-      publicidad: { total: tot(publi), gastos: publi },
-    },
-    total: tot(todos),
-    pagado: M.sum(pagos.map(({ g, p }) => M.of(g.moneda, p.pagado))),
-    pendiente: M.sum(pagos.map(({ g, p }) => M.of(g.moneda, p.pendiente))),
-    gastos: todos,
+    tandas, productos, campanas, lineas: L, fabricacion,
+    total: M.sum([fabricacion, L.campana.total, L.publicidad.total]),
+    pagado: M.sum(pagos.map((p) => p.pagado)),
+    pendiente: M.sum(pagos.map((p) => p.pendiente)),
+    gastos: todos.map((x) => x.gasto),
   };
 }
 
@@ -389,6 +498,10 @@ const gastoProductoId = (I, g) => g.producto_id ?? I.tanda.get(g.tanda_id)?.prod
 
 // A qué muestra, producto, campaña o insumo va cada gasto, para listarlos por nombre.
 function grupoDe(I, g) {
+  if (g.categoria === "molderia") {
+    const m = moldeBase(g);
+    return { key: `mo${m.id}`, nombre: moldeNombre(I, g), ruta: `#/gasto/${m.id}` };
+  }
   if (g.muestra_id) return { key: `m${g.muestra_id}`, nombre: I.muestra.get(g.muestra_id)?.nombre || "Muestra", ruta: `#/muestra/${g.muestra_id}` };
   const pid = gastoProductoId(I, g);
   if (pid) {
@@ -414,30 +527,37 @@ function agrupar(I, gastos) {
 }
 const sumGastos = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
 
-// Producción + muestras = producir ropa; + campañas y publicidad = producir y vender. El resto va aparte.
+// Cada envío vinculado a varias compras se reemplaza por sus partes (suman lo mismo).
+export const expandir = (I, gastos) => gastos.flatMap((g) => I.partesDe.get(g.id) || [g]);
+
+// Producción + muestras + moldería = producir ropa; + campañas y publicidad = producir y vender. El resto va aparte.
 export function balancePeriodo(I, gastos) {
+  gastos = expandir(I, gastos);
   const of = (cat) => gastos.filter((g) => g.categoria === cat);
   const linea = (key, nombre, gs, porNombre = true) => ({ key, nombre, gastos: gs, total: sumGastos(gs), grupos: porNombre ? agrupar(I, gs) : null });
-  const molde = of("molderia");
   const produccion = linea("produccion", "Producción", of("produccion"));
-  const muestras = linea("muestras", molde.length ? "Muestras y moldería" : "Muestras",
-    [...of("muestras").filter((g) => !muestraNoProducida(I, g)), ...molde]);
+  const muestras = linea("muestras", "Muestras", of("muestras").filter((g) => !muestraNoProducida(I, g)));
+  const molderia = linea("molderia", "Moldería todos los talles", of("molderia"));
   const campanas = linea("campanas", "Campañas de contenido de colecciones", of("campanas"));
   const publicidad = linea("publicidad", "Publicidad", of("publicidad"));
-  const producir = M.add(produccion.total, muestras.total);
+  const producir = M.sum([produccion.total, muestras.total, molderia.total]);
   const vender = M.sum([producir, campanas.total, publicidad.total]);
+  // Postventa, comisiones y administración van juntas en "Otros gastos", separadas por tipo.
+  const otros = linea("otros", "Otros gastos", gastos.filter((g) => CAT[g.categoria]?.otros), false);
+  otros.grupos = CATEGORIAS.filter((c) => c.otros).map((c) => {
+    const gs = of(c.key);
+    return { key: c.key, nombre: c.nombre, gastos: gs, total: sumGastos(gs) };
+  }).filter((x) => x.gastos.length);
   const noAsignados = [
     linea("equipamiento", "Equipamiento", of("equipamiento"), false),
     linea("packaging", "Packaging y presentación", of("packaging")),
     linea("suscripciones", "Suscripciones y fijos", of("suscripciones")),
-    linea("envios", "Envíos y posventa", of("envios"), false),
-    linea("comisiones", "Comisiones y cobros", of("comisiones"), false),
-    linea("administracion", "Administración e impuestos", of("administracion"), false),
     linea("sin", "Sin categoría", gastos.filter((g) => !CAT[g.categoria]), false),
     linea("no_producidas", "Muestras no producidas", gastos.filter((g) => muestraNoProducida(I, g))),
+    otros,
   ].filter((x) => x.gastos.length);
   return {
-    produccion, muestras, producir, campanas, publicidad, vender,
+    produccion, muestras, molderia, producir, campanas, publicidad, vender,
     noAsignados, totalNoAsignados: M.sum(noAsignados.map((x) => x.total)),
   };
 }
@@ -486,7 +606,8 @@ export function conclusionPeriodo(I, per) {
 
   const rubros = [
     { key: "produccion", nombre: "producción", total: b.produccion.total },
-    { key: "muestras", nombre: b.muestras.nombre.toLowerCase(), total: b.muestras.total },
+    { key: "muestras", nombre: "muestras", total: b.muestras.total },
+    { key: "molderia", nombre: "moldería de todos los talles", total: b.molderia.total },
     { key: "campanas", nombre: "campañas de contenido", total: b.campanas.total },
     { key: "publicidad", nombre: "publicidad", total: b.publicidad.total },
     { key: "fuera", nombre: "gastos fuera de producción", total: b.totalNoAsignados },
@@ -500,7 +621,7 @@ export function conclusionPeriodo(I, per) {
     const tandas = I.D.tandas.filter((t) => tandaColeccionId(I, t) === colId && (t.creado || "").slice(0, 10) <= hasta &&
       !I.producto.get(t.producto_id)?.archivado);
     const ids = new Set(tandas.map((t) => t.id));
-    const todos = I.D.gastos.filter((g) => g.categoria === "produccion" && ids.has(g.tanda_id));
+    const todos = I.gastos.filter((g) => g.categoria === "produccion" && ids.has(g.tanda_id));
     const inicio = todos.reduce((min, g) => (!min || g.fecha < min ? g.fecha : min), null);
     const pasos = tandas.map((t) => ({ tanda: t, producto: I.producto.get(t.producto_id), ...pasoTanda(I, t, hasta) }));
     const terminada = pasos.length > 0 && pasos.every((p) => p.terminado);
@@ -555,9 +676,11 @@ export function faltaAsignar(g) {
   if (!g.categoria) return true;
   const c = CAT[g.categoria];
   if (!c) return true;
+  if (g._vinc) return false; // envío repartido entre compras de tela o moldería
   if (c.destino === "muestra") return !g.muestra_id;
   if (c.destino === "campana") return !g.campana_id;
-  if (c.coleccion && (g.coleccion_id || g._multi)) return false;
+  if (c.multi && g._multi) return false;
+  if (c.coleccion && g.coleccion_id) return false;
   if (c.destino === "producto") return c.tanda ? !g.tanda_id : !g.producto_id;
   return false;
 }
@@ -608,12 +731,6 @@ export function avisos(I) {
     const nombre = tandaLabel(I, t);
     if (t.cant_final == null && t.cant_estimada == null && tieneGastos) {
       out.push({ tipo: "cantidad", texto: `${nombre}: falta cargar cantidad`, ruta: `#/producto/${p.id}?tanda=${t.id}` });
-    } else if (t.cant_final == null && t.estado === "finalizada") {
-      out.push({ tipo: "cantidad", texto: `${nombre}: falta confirmar cantidad final`, ruta: `#/producto/${p.id}?tanda=${t.id}` });
-    }
-    if (t.estado === "finalizada") {
-      const pend = tandaCosts(I, t.id).conceptosPendientes;
-      if (pend.length) out.push({ tipo: "concepto", texto: `${nombre}: ${pend.join(", ")} pendiente${pend.length > 1 ? "s" : ""}`, ruta: `#/producto/${p.id}?tanda=${t.id}` });
     }
   }
   for (const c of I.D.campanas) {
@@ -678,9 +795,18 @@ export function destinoTexto(I, g) {
   if (g.campana_id) return I.campana.get(g.campana_id)?.nombre;
   if (g.opcion_id) return I.opcion.get(g.opcion_id)?.nombre;
   if (g.coleccion_id) { const c = I.coleccion.get(g.coleccion_id); return c ? `Colección ${c.nombre}` : null; }
-  const multi = I.tandasDeGasto.get(g.id);
+  const multi = g._tandas || I.tandasDeGasto.get(g.id);
   if (multi) return multi.map((id) => I.producto.get(I.tanda.get(id)?.producto_id)?.nombre).filter(Boolean).join(", ");
+  const refs = I.vinculosDe?.get(g.id);
+  if (refs) return refs.map((r) => compraNombre(I, r)).join(", ");
   return null;
+}
+
+// Nombre de una compra de tela o moldería: lo que dice la descripción y para qué es.
+export function compraNombre(I, g) {
+  const desc = (g.descripcion || "").trim() || g.concepto || CAT[g.categoria]?.nombre || "Compra";
+  const dest = g.categoria === "molderia" ? null : destinoTexto(I, g);
+  return dest ? `${desc} (${dest})` : desc;
 }
 
 export function gastoTitulo(I, g) {

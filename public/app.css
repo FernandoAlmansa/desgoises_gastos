@@ -17,6 +17,7 @@
   --ok: #047857;  --ok-soft: rgba(4, 120, 87, .1);
   --warn: #b45309; --warn-soft: rgba(180, 83, 9, .12);
   --danger: #b91c1c; --danger-soft: rgba(185, 28, 28, .1);
+  --orange: #c2410c;
   --bar: rgba(250, 250, 250, .84);
   --scrim: rgba(9, 9, 11, .45);
   --logo-filter: none;
@@ -46,6 +47,7 @@
     --ok: #34d399;  --ok-soft: rgba(52, 211, 153, .14);
     --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, .14);
     --danger: #f87171; --danger-soft: rgba(248, 113, 113, .14);
+    --orange: #fb923c;
     --bar: rgba(9, 9, 11, .8);
     --scrim: rgba(0, 0, 0, .6);
     --logo-filter: invert(1);
@@ -429,3 +431,69 @@ details.fold > summary .row-title { white-space: normal; }
 .day-head { display: inline-block; } .day-head::first-letter { text-transform: uppercase; }
 .row-sub.wrap, .row-title.wrap { white-space: normal; }
 .cat-group > .row .row-title { white-space: normal; }
+
+/* ---------- 27/10 (2) ---------- */
+/* Foto: botón de cámara sobre la foto; sin foto, todo el cuadrado es el botón */
+.sq-photo { position: relative; }
+.photo-btn {
+  position: absolute; right: 6px; bottom: 6px; width: 44px; height: 44px; border-radius: 999px; border: 0;
+  display: grid; place-items: center; background: rgba(0, 0, 0, .55); color: #fff;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: transform .12s var(--ease);
+}
+.photo-btn:active { transform: scale(.92); }
+button.sq-empty { width: 100%; height: 100%; border: 0; background: transparent; place-content: center; font: inherit; }
+button.sq-empty:active { background: var(--surface-3); }
+
+/* Encuadre cuadrado */
+.crop { position: relative; width: 100%; max-width: 440px; justify-self: center; aspect-ratio: 1; overflow: hidden; border-radius: var(--radius); background: #000; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.crop:active { cursor: grabbing; }
+.crop img { position: absolute; left: 50%; top: 50%; max-width: none; transform-origin: center; pointer-events: none; will-change: transform; }
+.crop::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .35);
+  background: linear-gradient(to right, transparent calc(33.33% - .5px), rgba(255, 255, 255, .28) calc(33.33% - .5px) calc(33.33% + .5px), transparent calc(33.33% + .5px) calc(66.66% - .5px), rgba(255, 255, 255, .28) calc(66.66% - .5px) calc(66.66% + .5px), transparent calc(66.66% + .5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - .5px), rgba(255, 255, 255, .28) calc(33.33% - .5px) calc(33.33% + .5px), transparent calc(33.33% + .5px) calc(66.66% - .5px), rgba(255, 255, 255, .28) calc(66.66% - .5px) calc(66.66% + .5px), transparent calc(66.66% + .5px)); }
+.range { width: 100%; min-height: 44px; accent-color: var(--primary); }
+
+/* Ficha del producto: datos al costado de la foto */
+.photo-meta.compact { gap: 8px; align-self: stretch; align-content: center; }
+.kv { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 0; min-width: 0; line-height: 1.3; }
+.kv-l { width: 100%; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.kv-v { font-size: 16px; font-weight: 650; overflow-wrap: anywhere; }
+.kv-s { font-size: 13px; color: var(--muted); }
+.estado-dot { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.estado-dot::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex: none; }
+.estado-dot.produccion { color: var(--orange); }
+.estado-dot.finalizada { color: var(--ok); }
+
+/* Colección: vista previa de productos (3 filas × 4), llenando desde abajo */
+.photo-meta.grid-meta { align-self: stretch; align-content: end; gap: 6px; justify-items: stretch; }
+.pg-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.pg { display: grid; gap: 4px; }
+.pg-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.pg-cell { aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; color: var(--muted); }
+.pg-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pg-cell:active { opacity: .8; }
+
+/* Colección: totales en una franja chica */
+.tot-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 12px 16px; }
+.tot-strip .stat b { font-size: 16px; }
+.tot-strip .stat:first-child b { font-size: 17px; font-weight: 700; }
+.fold-n { font-weight: 400; font-size: 14px; }
+
+/* Algo que se toca pero no parece botón (ej.: saldo pendiente) */
+a.stat-link { display: block; color: inherit; border-radius: 8px; margin: -4px; padding: 4px; transition: background-color .15s ease; }
+a.stat-link:active, a.stat-link:hover { background: var(--surface-2); }
+
+/* Productos agrupados por colección */
+.prod-group { display: grid; gap: 16px; }
+
+/* Resumen: muestras, moldería y otros gastos se despliegan con la flecha a la derecha */
+details.bal-fold > summary { list-style: none; cursor: pointer; padding-bottom: 10px; }
+details.bal-fold > summary::-webkit-details-marker { display: none; }
+details.bal-fold > summary:active { background: var(--surface-2); }
+details.bal-fold > summary .chev { color: var(--muted); transition: transform .2s var(--ease); }
+details.bal-fold[open] > summary .chev { transform: rotate(180deg); }
+
+/* Carga: opciones con flecha (envíos y otros gastos) */
+.cat-btn > span:not(.ico-box) { flex: 1; }
+.cat-btn .chev { color: var(--muted); }
+.bal-head .row-title { white-space: normal; }

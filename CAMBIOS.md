@@ -10,15 +10,56 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 ## Estado actual
 
 - **Publicación:** automática. Desde el 26/10, Cloudflare (Settings → Build) está conectado al repositorio de GitHub, rama `main`: cada vez que se sube algo, la app se publica sola en uno o dos minutos. Ya no hace falta `npx wrangler deploy`.
-- **Versión de la base de datos:** v4 (foto y "no se va a producir" en muestras, tipo de estampa en gastos). Se actualiza sola en la primera visita después de publicar.
+- **Versión de la base de datos:** v5 (envíos y cadetes, envíos vinculados a telas o moldes, conceptos de moldería). Se actualiza sola en la primera visita después de publicar.
 - **Pendientes / dudas abiertas:**
-  - Confirmar que la 3.ª categoría es **Moldería** (salió de un audio que decía "mueblería / mordería").
-  - El packaging vinculado se suma en el producto, pero **no** en el total de la colección (allá se suman gastos, y la compra de packaging es un gasto general). Revisar si se quiere ver también en la colección.
+  - **Prendas entregadas como parte de pago** (campañas de contenido): falta hacerlo. El usuario va a mandar cómo se ve en los gastos de la campaña. Ya está pensado el lugar: en la campaña (entre los gastos y el reparto), en la ficha del producto (debajo de "Campaña asignada") y en el balance de la colección (debajo de "Campañas de contenido").
+  - El packaging vinculado se suma en el producto, pero **no** en el total de la colección (el usuario no lo puso en la lista del balance de la colección).
   - Si una publicidad se reparte entre productos de **colecciones distintas**, en cada colección se cuenta el gasto entero (no solo su parte).
-  - En el balance del Resumen, la **moldería** va junto con las muestras ("Muestras y moldería"), y envíos, comisiones y administración van en "Gastos no asignados". Confirmar que así está bien.
-  - Esta computadora no tiene Node: los cambios del 27/10 se probaron con un servidor de prueba en Python y datos de ejemplo, no con `npm run dev`.
+  - Esta computadora no tiene Node: los cambios del 27/10 se probaron con un servidor de prueba en Python y datos de ejemplo, no con `npm run dev`. Las pruebas de `test/calc.test.js` se corrieron en el navegador.
 
 ---
+
+## 2026-10-27 (2) — Encuadre de fotos, estado automático, moldería compartida, envíos y cadetes, otros gastos
+
+**Qué cambió**
+- **Fotos:** al elegir una foto (producto, muestra o colección) se abre "Encuadrar foto": se arrastra para centrarla y se acerca con dos dedos o con la barra. Se guarda cuadrada, tal cual se ve. El botón para cambiarla ahora es una camarita sobre la foto.
+- **Ficha del producto**
+  - Arriba a la derecha: Colección, **Producción** (total y por unidad), **Directo** (total y por unidad) y el estado de la producción con un punto de color: gris **En preparación**, naranja **En producción**, verde **Producción finalizada**.
+  - El estado **ya no se elige**: está en preparación hasta la primera compra de **tela de producción** (las muestras no cuentan), pasa a producción con esa compra, y queda finalizada al tocar "Revisada y cerrada". El cuadro de la tanda arranca directo con las cantidades.
+  - En el Balance, "Muestras y moldería" se separó en **Muestras** y **Moldería todos los talles**. Al desplegar la moldería se ve cada molde con su total y cuánto le toca a cada unidad; si el molde sirve para varios productos, se divide entre las unidades de todos.
+- **Productos:** sin los filtros de arriba. Todos los productos uno abajo del otro, con el nombre de la colección chiquito arriba de cada grupo.
+- **Resumen**
+  - El **Saldo pendiente** se puede tocar (se ve igual que antes): abre la lista de **Saldos pendientes**, y tocando cada uno se registra el pago con el saldo ya puesto.
+  - Balance: Producción muestra cada producto; **Muestras** y **Moldería todos los talles** arrancan cerradas, con la flechita hacia abajo a la derecha; al abrirlas aparece cada muestra o molde, que a su vez se despliega.
+  - En Gastos no asignados aparece **Otros gastos** (postventa, comisiones y administración), también desplegable.
+- **Carga de gastos**
+  - "Moldería" ahora se llama **Moldería todos los talles**, pregunta **"¿Qué producto/s?"** y se pueden elegir varios: el gasto se reparte por las unidades (de la primera producción de cada uno). Tiene conceptos: Moldería papel kraft y Moldería papel.
+  - Desapareció "Envíos y posventa". Ahora están **Envíos y cadetes** (antepenúltima) y **Otros gastos** (última, con Postventa, Comisiones y cobros, Administración e impuestos).
+  - **Envíos y cadetes:** se elige Correo, Expreso o Cadete → "¿… relacionado a qué?" con todos los conceptos (de muestras, producción, moldería y campañas) → a qué muestra, producto o campaña. Con **tela** o **moldería** (incluido el molde de muestras) se eligen una o varias compras, de la más nueva a la más vieja, y el envío se reparte **según lo que costó cada compra** (no por kilos).
+  - El envío **no es una categoría nueva**: se suma dentro del concepto que corresponde. Por ejemplo, el cadete de la frisa aparece en la Producción del producto como un gasto más, con su descripción y la parte que le toca.
+- **Colección**
+  - Al lado de la foto: "X productos" y una vista previa de hasta 12 productos (3 filas de 4), que se llena desde la fila de abajo; el texto queda justo arriba de la última fila con productos.
+  - Los totales (costo total, pagado, pendiente) quedaron en una franja chica.
+  - **Balance de la producción**: Producción, Muestras y Moldería todos los talles (con su cantidad entre paréntesis) → **Total de fabricación y desarrollo de la colección** → Campañas de contenido y Publicidad de sus productos → **Costo total de la colección**. Todo arranca cerrado; adentro, cada producto, muestra, molde o campaña se despliega con su detalle.
+  - "Publicidad de la colección" pasó al final de la pantalla.
+- **Campaña:** primero los gastos (con el botón para cargar) y después el reparto por unidades.
+- **Gestionar:** salieron Colecciones y Campañas (ya están en su pestaña). Se agregó **Moldería todos los talles**, con cada molde por el nombre de la descripción, y **Conceptos de moldería** en opciones de carga.
+- **Detalle de un gasto:** un envío muestra entre qué compras se repartió; una moldería compartida muestra qué productos la usan y cuánto le toca a cada uno; una compra de tela o moldería muestra sus envíos.
+
+**Por qué**
+- Pedido del usuario con 15 capturas del celular.
+
+**Decisiones**
+- La moldería compartida se reparte con las unidades de la **primera producción** de cada producto, porque el desarrollo se cuenta una sola vez, ahí.
+- Lo que estaba cargado como "Envíos y posventa" pasa a **Postventa**.
+- En las listas, la parte de un envío repartido muestra lo que le toca y, abajo, "de $ total del envío".
+
+**Notas técnicas**
+- Esquema v5 (`src/schema.js`): `gastos.envio` (`correo` | `expreso` | `cadete`), tabla `gasto_vinculos` (envío → compras de tela o moldería), `UPDATE` de `envios` a `posventa`, opciones `concepto_molde`.
+- Worker: columna `envio` validada, ruta `PUT /api/gastos/:id/vinculos`, `gastoVinculos` en `/api/data` y limpieza de vínculos al borrar un gasto. Importación de Notion: "Envíos" → `posventa`.
+- `calc.js`: `MENU_CARGA`, `ENVIO`, `estadoProduccion`, `multiInfo` (reemplaza a `publiMultiInfo`, que queda como atajo), `moldesDeProducto`, `gastosMuestras`, `expandir`. `index()` arma `I.gastos`, donde cada envío vinculado se reemplaza por sus partes (repartidas con `splitByUnits` según el monto de cada compra); los índices por tanda, producto y muestra usan esa lista. `tandaCosts` y `coleccionCosts` devuelven `lineas.muestras` y `lineas.molderia` (se mantiene `lineas.desarrollo`). `tandas.estado` ya no se usa.
+- `ui.js`: `cropSquare(file)` (encuadre con arrastre, pellizco y barra).
+- 3 pruebas nuevas (22 en total, todas pasan, corridas en el navegador). Caché de la app `dg-v5`.
 
 ## 2026-10-27 — Balance y conclusión en el Resumen, muestras con foto, tipos de estampa
 

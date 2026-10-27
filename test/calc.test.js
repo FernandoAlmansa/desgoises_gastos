@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   index, campaignInfo, tandaCosts, coleccionCosts, pagoInfo, splitByUnits, avisos,
   generalesDelMes, simularCobertura, faltaAsignar, M, balancePeriodo, conclusionPeriodo, estampaInfo, pasoTanda, inPeriod,
+  estadoProduccion,
 } from "../public/js/calc.js";
 
 const $ = (pesos) => pesos * 100;
@@ -149,7 +150,7 @@ test("Tienda Nube entra en la simulación una vez; la compra grande queda afuera
 test("gasto importado sin categoría queda pendiente de asignar", () => {
   assert.equal(faltaAsignar({ categoria: null }), true);
   assert.equal(faltaAsignar({ categoria: "produccion", producto_id: 1 }), true);
-  assert.equal(faltaAsignar({ categoria: "envios" }), false);
+  assert.equal(faltaAsignar({ categoria: "posventa" }), false);
 });
 
 test("publicidad de una colección se reparte por unidades entre sus productos", () => {
@@ -250,4 +251,48 @@ test("Conclusión: colección comenzada, paso de cada producto y peso de la camp
   D.historial = D.tandas.map((t, i) => ({ id: i + 1, entidad: "tandas", entidad_id: t.id, fecha: "2026-10-20 12:00:00", detalle: JSON.stringify({ cerrada: [0, 1] }) }));
   C = conclusionPeriodo(index(D), "2026-10");
   assert.equal(C.colecciones[0].estado, "completa");
+});
+
+test("Moldería de todos los talles para varios productos: se reparte por unidades de la primera tanda", () => {
+  const D = base();
+  // Campera 20 u. y crewneck negro 40 u.: $90.000 → $30.000 y $60.000 ($1.500 por unidad en los dos).
+  D.gastos.push({ id: 40, fecha: "2026-10-06", monto: $(90000), moneda: "ARS", categoria: "molderia", descripcion: "Moldes buzos" });
+  D.gastoTandas = [{ gasto_id: 40, tanda_id: 1 }, { gasto_id: 40, tanda_id: 2 }];
+  const I = index(D);
+  assert.equal(M.get(tandaCosts(I, 1).lineas.molderia.total), $(30000));
+  assert.equal(M.get(tandaCosts(I, 2).lineas.molderia.total), $(60000));
+  assert.equal(tandaCosts(I, 2).lineas.publicidad.multi.length, 0); // no se confunde con publicidad
+  assert.equal(faltaAsignar(I.gasto.get(40)), false);
+  // En la colección y en el Resumen se cuenta una sola vez y entera.
+  assert.equal(M.get(coleccionCosts(I, 1).lineas.molderia.total), $(90000));
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-10")));
+  assert.equal(M.get(B.molderia.total), $(90000));
+  assert.equal(B.molderia.grupos[0].nombre, "Moldes buzos");
+});
+
+test("Envío de varias telas: se reparte según lo que costó cada una y suma en Producción", () => {
+  const D = base();
+  // Tela del crewneck negro $500.000 (gasto 4) y otra del blanco $100.000: el expreso de $12.000 → $10.000 y $2.000.
+  D.gastos.push({ id: 41, fecha: "2026-10-07", monto: $(100000), moneda: "ARS", categoria: "produccion", producto_id: 3, tanda_id: 3, concepto: "Tela" });
+  D.gastos.push({ id: 42, fecha: "2026-10-08", monto: $(12000), moneda: "ARS", categoria: "produccion", concepto: "Tela", envio: "expreso" });
+  D.gastoVinculos = [{ gasto_id: 42, ref_id: 4 }, { gasto_id: 42, ref_id: 41 }];
+  const I = index(D);
+  assert.equal(M.get(tandaCosts(I, 2).lineas.produccion.total), $(810000));
+  assert.equal(M.get(tandaCosts(I, 3).lineas.produccion.total), $(102000));
+  assert.equal(faltaAsignar(I.gasto.get(42)), false);
+  // En la colección y en el Resumen el envío suma una sola vez, por su total.
+  assert.equal(M.get(coleccionCosts(I, 1).lineas.produccion.total), $(912000));
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-10")));
+  assert.equal(M.get(B.produccion.total), $(912000));
+  assert.equal(M.get(B.produccion.grupos.find((x) => x.nombre === "Crewneck blanco").total), $(102000));
+});
+
+test("Estado de la producción: preparación hasta la primera tela, después producción, y finalizada al cerrar", () => {
+  const D = base();
+  let I = index(D);
+  assert.equal(estadoProduccion(I, D.tandas[0]), "preparacion"); // campera: sin gastos de producción
+  assert.equal(estadoProduccion(I, D.tandas[1]), "produccion"); // crewneck negro: ya compró tela
+  D.tandas[1].cerrada = 1;
+  I = index(D);
+  assert.equal(estadoProduccion(I, D.tandas[1]), "finalizada");
 });
