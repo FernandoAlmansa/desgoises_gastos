@@ -58,12 +58,13 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     st.multi = I().tandasDeGasto.get(gasto.id)?.slice() || null;
     const refs = I().vinculosDe.get(gasto.id);
     st.vinc = refs ? new Set(refs.map((r) => r.id)) : null;
+    st.muestras = gasto._muestras?.slice() || null;
     for (const f of I().filasDeGasto.get(gasto.id) || []) st.pesos.set(f.tanda_id, { ventas: f.ventas, por_prenda: f.por_prenda });
   }
   if (st.categoria === "publicidad" && !st.publi_tipo && editing) st.publi_tipo = "visibilidad";
 
   function clearDestino() {
-    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg", "multi", "sel", "vinc"]) st[k] = null;
+    for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg", "multi", "sel", "vinc", "muestras"]) st[k] = null;
     st.pesos = new Map();
   }
   const esConv = () => st.categoria === "publicidad" && st.publi_tipo === "conversion";
@@ -106,6 +107,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       return (r?.descripcion || "").trim() || `1 ${tipo[0]}`;
     }
     if (st.multi?.length) return `${st.multi.length} productos`;
+    if (st.muestras?.length) return `${st.muestras.length} muestras`;
     if (st.muestra_id) return i.muestra.get(st.muestra_id)?.nombre;
     if (st.producto_id) return i.producto.get(st.producto_id)?.nombre;
     if (st.campana_id) return i.campana.get(st.campana_id)?.nombre;
@@ -389,18 +391,24 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const items = listItems();
     const needsCol = c.destino === "producto" || c.destino === "campana";
     const cols = c.coleccion ? coleccionItems() : [];
-    // Publicidad y moldería se pueden cargar a uno o varios productos (en un envío, a uno solo).
-    const multi = !!c.multi && !st.envio;
+    // Producción, moldería y publicidad se pueden cargar a uno o varios productos, y las muestras a una o varias muestras
+    // (en un envío, a uno solo).
+    const esMuestra = c.destino === "muestra";
+    const multi = (!!c.multi || esMuestra) && !st.envio;
     if (multi && !st.sel) {
       const i = I();
-      st.sel = new Set(st.multi?.length ? st.multi.map((id) => i.tanda.get(id)?.producto_id).filter(Boolean) : st.producto_id ? [st.producto_id] : []);
+      st.sel = new Set(esMuestra ? st.muestras?.length ? st.muestras : st.muestra_id ? [st.muestra_id] : []
+        : st.multi?.length ? st.multi.map((id) => i.tanda.get(id)?.producto_id).filter(Boolean) : st.producto_id ? [st.producto_id] : []);
     }
+    const nombre = esMuestra ? ["muestra", "muestras", "Una o varias muestras", "Elegí una o varias muestras", "Se reparte en partes iguales entre ellas."]
+      : ["producto", "productos", "Uno o varios productos", "Elegí uno o varios productos", "Se reparte entre ellos según las unidades de cada uno."];
     body.innerHTML = `
       ${crumbs()}
-      <h3 class="h" style="margin:0;font-size:20px">${multi ? (c.coleccion ? "¿Qué producto/s o colección?" : "¿Qué producto/s?") : txt.titulo}</h3>
+      <h3 class="h" style="margin:0;font-size:20px">${multi ? (esMuestra ? "¿Qué muestra/s?" : c.coleccion ? "¿Qué producto/s o colección?" : "¿Qué producto/s?") : txt.titulo}</h3>
+      ${multi && esMuestra ? `<p class="hint" style="margin:-4px 0 0">Elegí varias si el gasto sirve para más de una (por ejemplo, una tela o un cadete para varias muestras): se reparte en partes iguales.</p>` : ""}
       ${multi && c.key === "produccion" ? `<p class="hint" style="margin:-4px 0 0">Elegí varios si el gasto sirve para más de uno (por ejemplo, una estampa compartida): se reparte según las unidades de cada uno.</p>` : ""}
       ${items.length + cols.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
-      ${multi ? `<div class="hero-label" style="margin-bottom:-8px">Uno o varios productos</div>` : ""}
+      ${multi ? `<div class="hero-label" style="margin-bottom:-8px">${nombre[2]}</div>` : ""}
       <div class="card flush">
         <ul class="list" id="d-list">
           <li><button type="button" class="row add" id="d-add"><span class="ico-box">${icon("plus")}</span><span class="row-main">${txt.nuevo}</span></button></li>
@@ -430,11 +438,19 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     foot.parentElement.hidden = !multi;
     const seguir = () => {
       const n = st.sel.size;
-      foot.innerHTML = `<button class="btn block" id="d-next" ${n ? "" : "disabled"}>${n > 1 ? `Seguir con ${n} productos` : n ? "Seguir con 1 producto" : "Elegí uno o varios productos"}</button>
-        ${n > 1 ? `<p class="hint" style="margin:8px 0 0;text-align:center">Se reparte entre ellos según las unidades de cada uno.</p>` : ""}`;
+      foot.innerHTML = `<button class="btn block" id="d-next" ${n ? "" : "disabled"}>${n > 1 ? `Seguir con ${n} ${nombre[1]}` : n ? `Seguir con 1 ${nombre[0]}` : nombre[3]}</button>
+        ${n > 1 ? `<p class="hint" style="margin:8px 0 0;text-align:center">${nombre[4]}</p>` : ""}`;
       $("#d-next", foot).onclick = () => {
         const ids = [...st.sel];
         if (esConv()) return elegirProductosConv(ids);
+        if (esMuestra && ids.length > 1) {
+          const concepto = st.concepto;
+          clearDestino();
+          st.concepto = concepto;
+          st.muestras = ids;
+          st.sel = new Set(ids);
+          return go("detalle");
+        }
         if (ids.length === 1) return pick(ids[0]);
         const i = I();
         const concepto = st.concepto;
@@ -813,6 +829,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       if (conDatos || I().filasDeGasto.has(saved.id)) await api(`gastos/${saved.id}/tandas`, { method: "PUT", body: { tandas: conDatos ? filas : [] } });
       const vinc = st.envio && st.vinc?.size ? [...st.vinc] : [];
       if (vinc.length || gasto?._vinc) await api(`gastos/${saved.id}/vinculos`, { method: "PUT", body: { ref_ids: vinc } });
+      if (st.muestras?.length || gasto?._muestras) await api(`gastos/${saved.id}/muestras`, { method: "PUT", body: { muestra_ids: st.muestras || [] } });
       try { if (st.medio_pago) localStorage.setItem(LAST_MEDIO, st.medio_pago); } catch {}
       await ctx.reload();
     }).catch(() => null);

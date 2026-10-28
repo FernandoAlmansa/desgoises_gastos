@@ -84,6 +84,20 @@ export function index(D) {
     tandasDeGasto.set(id, g._tandas);
   }
 
+  // Gasto de muestras para varias muestras: se parte en partes iguales y cada parte va a su muestra.
+  const muestrasDeGasto = new Map(), partesMuestra = new Map();
+  for (const gm of D.gastoMuestras || []) push(muestrasDeGasto, gm.gasto_id, gm.muestra_id);
+  const enMuestras = (g, ids) => {
+    const split = splitByUnits(g.monto, ids.map(() => 1));
+    return ids.map((mid, i) => ({ ...g, monto: split[i], kg: g.kg ? (g.kg * split[i]) / g.monto : g.kg, muestra_id: mid, _reparto: true, _vid: `${gkey(g)}@m${mid}` }));
+  };
+  for (const [id, ids] of muestrasDeGasto) {
+    const g = gasto.get(id);
+    if (!g || g.muestra_id != null) continue;
+    g._muestras = ids;
+    partesMuestra.set(id, enMuestras(g, ids));
+  }
+
   // Envío vinculado a una o varias compras (telas o moldes): se parte según lo que costó cada compra
   // y cada parte se suma donde está esa compra, con su mismo concepto.
   const vinculosDe = new Map(), enviosDe = new Map(), partesDe = new Map();
@@ -101,10 +115,11 @@ export function index(D) {
       ...g, monto: split[i], categoria: r.categoria, tanda_id: r.tanda_id ?? null, producto_id: r.producto_id ?? null,
       muestra_id: r.muestra_id ?? null, campana_id: null, coleccion_id: null, opcion_id: null,
       _parte: true, _vid: `${g.id}-${r.id}`, _ref: r, _tandas: r._tandas || null, _multi: !!r._tandas,
-    })));
+    })).flatMap((x) => (x._ref._muestras ? enMuestras(x, x._ref._muestras) : [x]))); // compra para varias muestras
   }
-  // Lista de gastos con cada envío vinculado reemplazado por sus partes. Es la que usan los cálculos por destino.
-  const gastos = D.gastos.flatMap((g) => partesDe.get(g.id) || [g]);
+  // Lista de gastos con cada envío vinculado y cada gasto de varias muestras reemplazado por sus partes.
+  // Es la que usan los cálculos por destino.
+  const gastos = D.gastos.flatMap((g) => partesDe.get(g.id) || partesMuestra.get(g.id) || [g]);
 
   const I = {
     D, gastos,
@@ -121,7 +136,7 @@ export function index(D) {
     muestrasDeProducto: group(D.muestras, "producto_id"),
     noAplica: new Set(D.tandaConceptos.filter((c) => c.estado === "no_aplica").map((c) => `${c.tanda_id}|${c.concepto}`)),
     tandasDeCampana: new Map(), campanasDeTanda: new Map(),
-    tandasDeGasto, filasDeGasto, filaGT, vinculosDe, enviosDe, partesDe,
+    tandasDeGasto, filasDeGasto, filaGT, vinculosDe, enviosDe, partesDe, muestrasDeGasto, partesMuestra,
     multiDeTanda: new Map(),
     packagingDeProducto: group(D.productoPackaging || [], "producto_id"),
     prendasDeCampana: group(D.campanaPrendas || [], "campana_id"),
@@ -920,8 +935,8 @@ function agrupar(I, gastos) {
 }
 const sumGastos = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
 
-// Cada envío vinculado a varias compras se reemplaza por sus partes (suman lo mismo).
-export const expandir = (I, gastos) => gastos.flatMap((g) => I.partesDe.get(g.id) || [g]);
+// Cada envío vinculado a varias compras y cada gasto de varias muestras se reemplaza por sus partes (suman lo mismo).
+export const expandir = (I, gastos) => gastos.flatMap((g) => I.partesDe.get(g.id) || I.partesMuestra.get(g.id) || [g]);
 
 // Producción + muestras + moldería = producir ropa; + campañas y publicidad = producir y vender. El resto va aparte.
 export function balancePeriodo(I, gastos) {
@@ -1044,7 +1059,7 @@ export function conclusionPeriodo(I, per) {
     };
   });
 
-  const muestraIds = [...new Set(gastos.filter((g) => g.categoria === "muestras" && g.muestra_id).map((g) => g.muestra_id))];
+  const muestraIds = [...new Set(expandir(I, gastos).filter((g) => g.categoria === "muestras" && g.muestra_id).map((g) => g.muestra_id))];
   const muestras = {
     n: muestraIds.length,
     total: sumGastos(gastos.filter((g) => g.categoria === "muestras")),
@@ -1075,6 +1090,7 @@ export function faltaAsignar(g) {
   const c = CAT[g.categoria];
   if (!c) return true;
   if (g._vinc) return false; // envío repartido entre compras de tela o moldería
+  if (g._muestras) return false; // gasto repartido entre varias muestras
   if (c.destino === "muestra") return !g.muestra_id;
   if (c.destino === "campana") return !g.campana_id;
   if (c.multi && g._multi) return false;
@@ -1188,6 +1204,7 @@ export function tandaLabel(I, t) {
 
 export function destinoTexto(I, g) {
   if (g.muestra_id) return I.muestra.get(g.muestra_id)?.nombre;
+  if (g._muestras) return g._muestras.map((id) => I.muestra.get(id)?.nombre).filter(Boolean).join(", ");
   if (g.tanda_id) { const t = I.tanda.get(g.tanda_id); return t ? tandaLabel(I, t) : null; }
   if (g.producto_id) return I.producto.get(g.producto_id)?.nombre;
   if (g.campana_id) return I.campana.get(g.campana_id)?.nombre;

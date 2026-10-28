@@ -520,8 +520,8 @@ function vProducto(id, q) {
         ${estadoDot(sel.estadoProd)}`, "compact")}
 
       <div class="chips scroll" role="tablist" aria-label="Tandas">
-        ${tandas.length > 1 ? `<a class="chip" role="tab" href="#/producto/${id}?tanda=general" aria-pressed="${general}" aria-selected="${general}">${icon("layers", "sm")} Balance general</a>` : ""}
         ${tandas.map((c) => `<a class="chip" role="tab" href="#/producto/${id}?tanda=${c.tanda.id}" aria-pressed="${c.tanda.id === t?.id}" aria-selected="${c.tanda.id === t?.id}">${c.tanda.cerrada ? icon("lock", "sm") : ""}${esc(c.tanda.nombre)}</a>`).join("")}
+        ${tandas.length > 1 ? `<a class="chip" role="tab" href="#/producto/${id}?tanda=general" aria-pressed="${general}" aria-selected="${general}">${icon("layers", "sm")} Balance general</a>` : ""}
         <button class="chip add" id="new-tanda">${icon("plus", "sm")} Nueva tanda</button>
       </div>
 
@@ -1670,6 +1670,13 @@ function repartoGasto(g) {
       return fila_(`#/gasto/${x._ref.id}`, compraNombre(I, x._ref), `Compra de ${money(x._ref.monto, x._ref.moneda)} · ${pctTxt(pct)} del total`, money(x.monto, g.moneda));
     }).join("")}</ul></section>
     <p class="hint" style="margin:0 4px">El envío se reparte según lo que costó cada compra, y cada parte se suma a esa compra con su mismo concepto.</p>`;
+  }
+  // Gasto para varias muestras: partes iguales.
+  const pm = I.partesMuestra.get(g.id);
+  if (pm) {
+    html += `<h2 class="section-label">Repartido entre muestras</h2><section class="card flush"><ul class="list">${pm.map((x) =>
+      fila_(`#/muestra/${x.muestra_id}`, I.muestra.get(x.muestra_id)?.nombre || "Muestra", null, money(x.monto, g.moneda))).join("")}</ul></section>
+    <p class="hint" style="margin:0 4px">Se reparte en partes iguales entre las muestras.</p>`;
   }
   // Producción o publicidad para varios productos (o para toda una colección): cuánto le toca a cada uno.
   const reparto = g.categoria !== "molderia" ? repartoInfo(I, g) : null;

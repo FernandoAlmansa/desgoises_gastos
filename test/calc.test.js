@@ -418,3 +418,23 @@ test("Período personalizado: del día al día", () => {
   assert.equal(inPeriod("2026-10-16", "2026-10-01..2026-10-15"), false);
   assert.equal(inPeriod("2026-09-30", "2026-09-20..2026-10-02"), true);
 });
+
+test("Gasto de muestras para varias muestras: partes iguales en cada una", () => {
+  const D = base();
+  D.muestras.push({ id: 3, nombre: "Buzo corto", producto_id: null });
+  // Tela de $90.000 (6 kg) para tres muestras → $30.000 y 2 kg en cada una.
+  D.gastos.push({ id: 90, fecha: "2026-10-12", monto: $(90000), moneda: "ARS", categoria: "muestras", concepto: "Tela", descripcion: "Frisa", kg: 6 });
+  D.gastoMuestras = [{ gasto_id: 90, muestra_id: 1 }, { gasto_id: 90, muestra_id: 2 }, { gasto_id: 90, muestra_id: 3 }];
+  const I = index(D);
+  assert.equal(faltaAsignar(I.gasto.get(90)), false);
+  const m3 = I.gastosDeMuestra.get(3);
+  assert.equal(m3.length, 1);
+  assert.equal(m3[0].monto, $(30000));
+  assert.equal(m3[0].kg, 2);
+  // La muestra 1 está vinculada a la campera: su parte suma al desarrollo de ese producto.
+  assert.equal(M.get(tandaCosts(I, 1).lineas.muestras.total), $(80000) + $(30000));
+  // En el Resumen se ve en cada muestra y suma el gasto entero.
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-10")));
+  assert.equal(M.get(B.muestras.total), $(90000));
+  assert.equal(B.muestras.grupos.length, 3);
+});

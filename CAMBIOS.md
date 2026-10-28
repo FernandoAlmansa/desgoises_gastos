@@ -10,7 +10,7 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 ## Estado actual
 
 - **Publicación:** automática. Desde el 26/10, Cloudflare (Settings → Build) está conectado al repositorio de GitHub, rama `main`: cada vez que se sube algo, la app se publica sola en uno o dos minutos. Ya no hace falta `npx wrangler deploy`.
-- **Versión de la base de datos:** v6 (tipo de publicidad, ventas y avíos por prenda en cada producto de un gasto, simulaciones de costos unitarios). Se actualiza sola en la primera visita después de publicar.
+- **Versión de la base de datos:** v7 (gastos de muestras para varias muestras; la v6 trajo tipo de publicidad, ventas y avíos por prenda, y simulaciones). Se actualiza sola en la primera visita después de publicar.
 - **Pendientes / dudas abiertas:**
   - **Prendas entregadas en la colección:** se muestran en el balance pero **no** se suman al costo total, porque fabricarlas ya está contado en Producción (si no, se contaría dos veces). Confirmar con el usuario que está bien así.
   - El packaging vinculado se suma en el producto, pero **no** en el total de la colección (el usuario no lo puso en la lista del balance de la colección).
@@ -19,6 +19,26 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
   - Desde el 28/10 esta computadora tiene Node: las pruebas se corren con `npm test` y la app local con `npm run dev` (se instalaron las dependencias; `.dev.vars` con `APP_KEY=prueba`).
 
 ---
+
+## 2026-10-28 (2) — Gasto de muestras para varias muestras y "Balance general" a la derecha
+
+**Qué cambió**
+- Al cargar un gasto de **Muestras** pregunta **"¿Qué muestra/s?"** y se pueden elegir varias (por ejemplo, una tela o un cadete para varias muestras). El gasto se reparte **en partes iguales**: cada muestra muestra su parte "de $ total", y si está vinculada a un producto, esa parte suma a su desarrollo.
+- El detalle del gasto muestra "Repartido entre muestras" con lo que le toca a cada una.
+- En la ficha del producto, el chip **"Balance general"** pasó a la derecha de las tandas (antes de "Nueva tanda").
+
+**Por qué**
+- Pedido del usuario con una captura de la ficha del Zip Hoodie Negra.
+
+**Decisiones**
+- Las muestras no tienen unidades, así que el reparto es en partes iguales. En un envío (correo, flete, cadete…) a una muestra se sigue eligiendo una sola.
+- Una muestra con gastos compartidos no se puede borrar (se archiva), igual que una con gastos propios.
+
+**Notas técnicas**
+- Esquema v7: tabla `gasto_muestras` (gasto, muestra). Con varias muestras el gasto queda sin `muestra_id`.
+- Worker: `PUT /api/gastos/:id/muestras` con `{ muestra_ids }`, `gastoMuestras` en `/api/data`, limpieza al borrar el gasto.
+- `calc.js`: `index()` arma `I.partesMuestra` (partes iguales con `_reparto`, también para envíos vinculados a esas compras) y las pone en `I.gastos`; `expandir`, `faltaAsignar`, `destinoTexto` y la conclusión las tienen en cuenta.
+- 1 prueba nueva (30 en total). Probado con `npm run dev`: carga a dos muestras, detalle, edición, ficha de la muestra y orden de los chips. Caché `dg-v7`.
 
 ## 2026-10-28 — Publicidad de conversión y de visibilidad, simulaciones de costos unitarios, producción para varios productos, avíos y período personalizado
 

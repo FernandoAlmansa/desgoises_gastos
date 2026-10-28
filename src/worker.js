@@ -104,6 +104,9 @@ async function api(request, env, url) {
   if (parts[0] === "campanas" && parts[2] === "prendas" && method === "PUT") {
     return json(await setCampanaPrendas(db, int(parts[1]), await request.json()));
   }
+  if (parts[0] === "gastos" && parts[2] === "muestras" && method === "PUT") {
+    return json(await setGastoMuestras(db, int(parts[1]), await request.json()));
+  }
   if (parts[0] === "gastos" && parts[2] === "vinculos" && method === "PUT") {
     return json(await setGastoVinculos(db, int(parts[1]), await request.json()));
   }
@@ -168,7 +171,7 @@ async function requireAuth(request, env) {
 async function allData(db) {
   const q = (sql) => db.prepare(sql).all().then((r) => r.results);
   const [opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, ajustes, historial,
-    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas, simulaciones] =
+    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas, simulaciones, gastoMuestras] =
     await Promise.all([
       q("SELECT * FROM opciones ORDER BY tipo, orden, nombre"),
       q("SELECT * FROM colecciones ORDER BY creado DESC"),
@@ -187,10 +190,11 @@ async function allData(db) {
       q("SELECT * FROM gasto_vinculos"),
       q("SELECT * FROM campana_prendas ORDER BY id"),
       q("SELECT * FROM simulaciones ORDER BY producto_id, numero, id"),
+      q("SELECT * FROM gasto_muestras"),
     ]);
   return {
     opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, historial,
-    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas, simulaciones,
+    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas, simulaciones, gastoMuestras,
     ajustes: Object.fromEntries(ajustes.map((a) => [a.clave, safeParse(a.valor)])),
   };
 }
@@ -284,6 +288,10 @@ async function deleteRow(db, table, id) {
     const used = await db.prepare(`SELECT COUNT(*) AS n FROM gastos WHERE ${ref} = ?`).bind(id).first();
     if (used.n > 0) throw new HttpError(409, `Tiene ${used.n} gasto${used.n === 1 ? "" : "s"} asociado${used.n === 1 ? "" : "s"}. Archivalo en lugar de borrarlo.`);
   }
+  if (table === "muestras") {
+    const compartidos = await db.prepare("SELECT COUNT(*) AS n FROM gasto_muestras WHERE muestra_id = ?").bind(id).first();
+    if (compartidos.n > 0) throw new HttpError(409, "Tiene gastos compartidos con otras muestras. Archivala en lugar de borrarla.");
+  }
   const stmts = [];
   if (table === "gastos") {
     const g = await db.prepare("SELECT * FROM gastos WHERE id = ?").bind(id).first();
@@ -293,6 +301,7 @@ async function deleteRow(db, table, id) {
     stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE gasto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM producto_packaging WHERE gasto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM gasto_vinculos WHERE gasto_id = ? OR ref_id = ?").bind(id, id));
+    stmts.push(db.prepare("DELETE FROM gasto_muestras WHERE gasto_id = ?").bind(id));
   }
   if (table === "tandas") {
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE tanda_id = ?").bind(id));
@@ -360,6 +369,15 @@ async function setCampanaPrendas(db, campanaId, body) {
     stmts.push(db.prepare("INSERT INTO campana_prendas (campana_id, producto_id, tanda_id, cantidad) VALUES (?, ?, ?, ?)")
       .bind(campanaId, int(x.producto_id), x.tanda_id == null ? null : int(x.tanda_id), cant));
   }
+  await db.batch(stmts);
+  return { ok: true };
+}
+
+// Muestras de un gasto compartido entre varias muestras (reemplaza la lista completa).
+async function setGastoMuestras(db, gastoId, body) {
+  const ids = [...new Set((body.muestra_ids || []).map(int))];
+  const stmts = [db.prepare("DELETE FROM gasto_muestras WHERE gasto_id = ?").bind(gastoId)];
+  for (const m of ids) stmts.push(db.prepare("INSERT INTO gasto_muestras (gasto_id, muestra_id) VALUES (?, ?)").bind(gastoId, m));
   await db.batch(stmts);
   return { ok: true };
 }

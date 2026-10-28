@@ -1,7 +1,7 @@
 // Estructura de la base. Se aplica sola la primera vez que el Worker recibe un pedido.
 // Si más adelante cambia, subir SCHEMA_VERSION y agregar las sentencias nuevas al final de MIGRATIONS.
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const MIGRATIONS = {
   1: [
@@ -195,6 +195,14 @@ export const MIGRATIONS = {
     )`,
     // Los envíos ya se suman dentro de cada concepto: el concepto de producción "Envíos y cadetes" se archiva.
     `UPDATE opciones SET archivada = 1 WHERE tipo = 'concepto_prod' AND (lower(nombre) LIKE 'env%' OR lower(nombre) LIKE '%cadete%')`,
+  ],
+  7: [
+    // Gasto de muestras para varias muestras a la vez: el gasto queda sin muestra_id y se reparte en partes iguales entre estas.
+    `CREATE TABLE IF NOT EXISTS gasto_muestras (
+      gasto_id INTEGER NOT NULL REFERENCES gastos(id),
+      muestra_id INTEGER NOT NULL REFERENCES muestras(id),
+      PRIMARY KEY (gasto_id, muestra_id)
+    )`,
   ],
 };
 
