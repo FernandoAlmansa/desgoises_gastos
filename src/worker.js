@@ -22,15 +22,16 @@ const TABLES = {
   gastos: [
     "fecha", "monto", "moneda", "categoria", "muestra_id", "producto_id", "tanda_id", "campana_id",
     "opcion_id", "concepto", "descripcion", "medio_pago", "proveedor", "comprobante_id", "cantidad",
-    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id", "estampa", "envio",
+    "cubre_meses", "estimado", "en_cantidad", "kg", "coleccion_id", "estampa", "envio", "publi_tipo",
   ],
   pagos: ["gasto_id", "fecha", "monto", "medio_pago"],
   producto_packaging: ["producto_id", "gasto_id", "por_prenda"],
+  simulaciones: ["producto_id", "tanda_id", "numero", "unidades", "descripcion", "cambios"],
 };
 const REQUIRED = {
   opciones: ["tipo", "nombre"], colecciones: ["nombre"], productos: ["nombre"], tandas: ["producto_id", "nombre"],
   muestras: ["nombre"], campanas: ["nombre"], gastos: ["fecha", "monto"], pagos: ["gasto_id", "fecha", "monto"],
-  producto_packaging: ["producto_id", "gasto_id"],
+  producto_packaging: ["producto_id", "gasto_id"], simulaciones: ["producto_id", "unidades"],
 };
 // Qué tablas no se pueden borrar si un gasto las usa.
 const REFERENCED_BY_GASTOS = {
@@ -167,7 +168,7 @@ async function requireAuth(request, env) {
 async function allData(db) {
   const q = (sql) => db.prepare(sql).all().then((r) => r.results);
   const [opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, ajustes, historial,
-    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas] =
+    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas, simulaciones] =
     await Promise.all([
       q("SELECT * FROM opciones ORDER BY tipo, orden, nombre"),
       q("SELECT * FROM colecciones ORDER BY creado DESC"),
@@ -185,10 +186,11 @@ async function allData(db) {
       q("SELECT * FROM producto_packaging ORDER BY id"),
       q("SELECT * FROM gasto_vinculos"),
       q("SELECT * FROM campana_prendas ORDER BY id"),
+      q("SELECT * FROM simulaciones ORDER BY producto_id, numero, id"),
     ]);
   return {
     opciones, colecciones, productos, tandas, tandaConceptos, muestras, campanas, campanaTandas, gastos, pagos, historial,
-    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas,
+    gastoTandas, productoPackaging, gastoVinculos, campanaPrendas, simulaciones,
     ajustes: Object.fromEntries(ajustes.map((a) => [a.clave, safeParse(a.valor)])),
   };
 }
@@ -199,7 +201,7 @@ function clean(table, body, partial) {
     if (!(col in body)) continue;
     let v = body[col];
     if (v === "" || v === undefined) v = null;
-    if (v !== null && (col.endsWith("_id") || ["monto", "cantidad", "cubre_meses", "cant_estimada", "cant_final", "orden"].includes(col))) {
+    if (v !== null && (col.endsWith("_id") || ["monto", "cantidad", "cubre_meses", "cant_estimada", "cant_final", "orden", "numero", "unidades"].includes(col))) {
       v = Math.round(Number(v));
       if (!Number.isFinite(v)) throw new HttpError(400, `Valor inválido en ${col}`);
     }
@@ -211,7 +213,16 @@ function clean(table, body, partial) {
       v = Math.round(Number(v) * 100) / 100;
       if (!Number.isFinite(v) || v <= 0) throw new HttpError(400, "La cantidad por prenda tiene que ser mayor a cero");
     }
-    if (v !== null && col === "envio" && !["correo", "expreso", "cadete"].includes(v)) throw new HttpError(400, "Tipo de envío inválido");
+    if (v !== null && col === "envio" && !["correo", "expreso", "flete", "cadete"].includes(v)) throw new HttpError(400, "Tipo de envío inválido");
+    if (v !== null && col === "publi_tipo" && !["conversion", "visibilidad"].includes(v)) throw new HttpError(400, "Tipo de publicidad inválido");
+    if (v !== null && col === "unidades" && !(v > 0)) throw new HttpError(400, "Las unidades tienen que ser más que cero");
+    if (v !== null && col === "cambios") {
+      if (typeof v !== "string") v = JSON.stringify(v);
+      if (v.length > 20000) throw new HttpError(400, "La simulación tiene demasiados cambios");
+      try { JSON.parse(v); } catch { throw new HttpError(400, "Cambios inválidos"); }
+      out[col] = v;
+      continue;
+    }
     if (v !== null && col === "estampa" && !["bordado", "serigrafia", "serigrafia_propia", "dtf"].includes(v)) throw new HttpError(400, "Tipo de estampa inválido");
     if (["estimado", "en_cantidad", "cerrada", "archivada", "archivado", "no_produce"].includes(col)) v = v ? 1 : 0;
     if (typeof v === "string") v = v.trim().slice(0, 500);
@@ -288,6 +299,7 @@ async function deleteRow(db, table, id) {
     stmts.push(db.prepare("DELETE FROM tanda_conceptos WHERE tanda_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE tanda_id = ?").bind(id));
     stmts.push(db.prepare("UPDATE campana_prendas SET tanda_id = NULL WHERE tanda_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM simulaciones WHERE tanda_id = ?").bind(id));
   }
   if (table === "campanas") {
     stmts.push(db.prepare("DELETE FROM campana_tandas WHERE campana_id = ?").bind(id));
@@ -300,6 +312,7 @@ async function deleteRow(db, table, id) {
     stmts.push(db.prepare("DELETE FROM gasto_tandas WHERE tanda_id IN (SELECT id FROM tandas WHERE producto_id = ?)").bind(id));
     stmts.push(db.prepare("DELETE FROM producto_packaging WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM campana_prendas WHERE producto_id = ?").bind(id));
+    stmts.push(db.prepare("DELETE FROM simulaciones WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM tandas WHERE producto_id = ?").bind(id));
     stmts.push(db.prepare("UPDATE muestras SET producto_id = NULL WHERE producto_id = ?").bind(id));
   }
@@ -319,10 +332,21 @@ async function setCampaignTandas(db, campanaId, body) {
   return { ok: true };
 }
 
+// Tandas de un gasto con sus datos: ventas (publicidad de conversión) y avíos por prenda.
+// Acepta { tandas: [{ tanda_id, ventas, por_prenda }] } o, como antes, { tanda_ids: [...] }.
 async function setGastoTandas(db, gastoId, body) {
-  const ids = [...new Set((body.tanda_ids || []).map(int))];
+  const filas = new Map();
+  for (const x of body.tandas || (body.tanda_ids || []).map((tanda_id) => ({ tanda_id }))) {
+    const ventas = x.ventas == null || x.ventas === "" ? null : Math.round(Number(x.ventas));
+    const pp = x.por_prenda == null || x.por_prenda === "" ? null : Math.round(Number(x.por_prenda) * 100) / 100;
+    if (ventas != null && !(ventas >= 0)) throw new HttpError(400, "Ventas inválidas");
+    if (pp != null && !(pp > 0)) throw new HttpError(400, "Los avíos por prenda tienen que ser más que cero");
+    filas.set(int(x.tanda_id), [ventas, pp]);
+  }
   const stmts = [db.prepare("DELETE FROM gasto_tandas WHERE gasto_id = ?").bind(gastoId)];
-  for (const t of ids) stmts.push(db.prepare("INSERT INTO gasto_tandas (gasto_id, tanda_id) VALUES (?, ?)").bind(gastoId, t));
+  for (const [t, [ventas, pp]] of filas) {
+    stmts.push(db.prepare("INSERT INTO gasto_tandas (gasto_id, tanda_id, ventas, por_prenda) VALUES (?, ?, ?, ?)").bind(gastoId, t, ventas, pp));
+  }
   await db.batch(stmts);
   return { ok: true };
 }

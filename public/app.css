@@ -502,3 +502,37 @@ details.bal-fold[open] > summary .chev { transform: rotate(180deg); }
 .stepper { display: flex; align-items: center; gap: 2px; flex: none; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); }
 .stepper b { min-width: 24px; text-align: center; font-size: 17px; font-weight: 650; }
 .stepper .icon-btn { width: 44px; height: 44px; }
+
+/* ---------- 2026-10-28: publicidad, período personalizado, campaña y simulaciones ---------- */
+.num-in { width: 84px; flex: none; text-align: right; min-height: 44px; }
+.sub-fold .sub-body { padding: 0 0 4px 24px; }
+.sub-fold .sub-body .sub-fold { margin: 0; }
+.per-custom { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 44px; margin-top: 4px;
+  background: none; border: 0; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; border-radius: var(--radius-sm); }
+.per-custom[aria-pressed="true"] { color: var(--text); }
+.per-custom:active { background: var(--surface-2); }
+.period .spacer { width: 44px; flex: none; }
+.camp-head { display: grid; gap: 10px; }
+.camp-col { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: -8px 0 -4px; color: var(--text); text-decoration: none; font-weight: 600; }
+.camp-col .chev { margin-left: auto; color: var(--muted); }
+.mini-thumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mini-thumbs .mt { width: 32px; height: 32px; border-radius: 8px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; color: var(--muted); }
+.mini-thumbs .mt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mini-thumbs .mt .i { width: 16px; height: 16px; }
+.mini-thumbs .mt-txt { font-size: 13px; color: var(--muted); margin-left: 4px; }
+.camp-total { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.camp-total b { font-size: 26px; font-weight: 650; letter-spacing: -.02em; }
+.cost-table.compact { font-size: 14px; }
+.cost-table.compact th { white-space: nowrap; letter-spacing: .02em; }
+.cost-table.compact td + td, .cost-table.compact th + th { padding-left: 8px; }
+.nowrap { white-space: nowrap; }
+.sim-head { display: grid; justify-items: center; text-align: center; gap: 6px; padding-top: 4px; }
+.sim-head .sim-photo { width: 112px; height: 112px; border-radius: var(--radius); overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); display: grid; place-items: center; color: var(--muted); }
+.sim-head .sim-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sim-head h2 { margin: 6px 0 0; font-size: 20px; line-height: 1.25; }
+.sim-units { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-weight: 650; font-size: 16px; cursor: pointer; }
+.sim-units .i { width: 16px; height: 16px; color: var(--muted); }
+textarea.input { min-height: 88px; resize: vertical; line-height: 1.4; padding-top: 10px; }
+.mod { color: var(--ok); font-weight: 600; font-size: 13px; white-space: nowrap; }
+.real { color: var(--muted); font-size: 12px; }
+.btn.wrap-btn { white-space: normal; height: auto; min-height: 52px; padding-top: 10px; padding-bottom: 10px; line-height: 1.3; text-align: center; }

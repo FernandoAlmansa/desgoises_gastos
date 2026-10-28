@@ -4,7 +4,7 @@
 // multi: se puede cargar a varios productos a la vez (se reparte por unidades). otros: va dentro de "Otros gastos".
 export const CATEGORIAS = [
   { key: "muestras", nombre: "Muestras", destino: "muestra", conceptos: "concepto_muestra", icon: "scissors" },
-  { key: "produccion", nombre: "Producción de ropa", destino: "producto", tanda: true, conceptos: "concepto_prod", icon: "shirt" },
+  { key: "produccion", nombre: "Producción de ropa", destino: "producto", tanda: true, multi: true, conceptos: "concepto_prod", icon: "shirt" },
   { key: "molderia", nombre: "Moldería todos los talles", destino: "producto", multi: true, conceptos: "concepto_molde", icon: "ruler" },
   { key: "campanas", nombre: "Campañas de contenido de colecciones", corto: "Campañas de contenido", destino: "campana", conceptos: "concepto_campana", icon: "camera" },
   { key: "publicidad", nombre: "Publicidad", destino: "producto", tanda: true, multi: true, coleccion: true, icon: "megaphone" },
@@ -26,8 +26,15 @@ export const MENU_CARGA = [
 ];
 
 // Un envío no es una categoría: se suma al concepto (tela, molde, corte…) al que corresponde.
-export const ENVIO = { correo: "Correo", expreso: "Expreso", cadete: "Cadete" };
-export const ENVIO_TXT = { correo: "Envío", expreso: "Expreso", cadete: "Cadete" };
+export const ENVIO = { correo: "Correo", expreso: "Expreso", flete: "Flete", cadete: "Cadete" };
+export const ENVIO_TXT = { correo: "Envío", expreso: "Expreso", flete: "Flete", cadete: "Cadete" };
+
+// Publicidad de conversión: se reparte según lo vendido y su costo por venta se promedia (ponderado por ventas).
+// Visibilidad / tráfico: no genera ventas directas; se reparte según las unidades producidas.
+export const PUBLI = { conversion: "Conversión", visibilidad: "Visibilidad / Tráfico" };
+export const publiTipo = (g) => (g.publi_tipo === "conversion" ? "conversion" : "visibilidad");
+export const esConversion = (g) => g.categoria === "publicidad" && g.publi_tipo === "conversion";
+export const esAvio = (concepto) => /^av[ií]o/i.test(concepto || "");
 // Con tela y moldería el envío se elige por compra (una o varias) y se reparte según lo que costó cada una.
 export const esMolde = (concepto) => /^molde/i.test(concepto || "");
 export const envioPorCompra = (categoria, concepto) =>
@@ -37,7 +44,7 @@ export const envioPorCompra = (categoria, concepto) =>
 export const ESTADO_PROD = { preparacion: "En preparación", produccion: "En producción", finalizada: "Producción finalizada" };
 export function estadoProduccion(I, t) {
   if (t.cerrada) return "finalizada";
-  return (I.gastosDeTanda.get(t.id) || []).some((g) => g.categoria === "produccion" && esTela(g.concepto)) ? "produccion" : "preparacion";
+  return gastosProduccion(I, t.id).gastos.some((g) => esTela(g.concepto)) ? "produccion" : "preparacion";
 }
 
 /* ---------- Dinero por moneda ---------- */
@@ -64,10 +71,18 @@ export function index(D) {
   const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
   const gasto = by(D.gastos);
 
-  // Publicidad o moldería cargada a varios productos: el gasto queda sin tanda propia y se reparte entre las suyas.
-  const tandasDeGasto = new Map();
-  for (const gt of D.gastoTandas || []) push(tandasDeGasto, gt.gasto_id, gt.tanda_id);
-  for (const [id, ts] of tandasDeGasto) { const g = gasto.get(id); if (g) { g._multi = true; g._tandas = ts; } }
+  // Filas de gasto_tandas: los productos de un gasto con sus datos (ventas, avíos por prenda).
+  // Con varios productos el gasto queda sin tanda propia y se reparte entre las suyas (_multi).
+  // Con uno solo el gasto conserva su tanda y la fila solo guarda esos datos.
+  const filasDeGasto = new Map(), tandasDeGasto = new Map(), filaGT = new Map();
+  for (const gt of D.gastoTandas || []) { push(filasDeGasto, gt.gasto_id, gt); filaGT.set(`${gt.gasto_id}|${gt.tanda_id}`, gt); }
+  for (const [id, filas] of filasDeGasto) {
+    const g = gasto.get(id);
+    if (!g || g.tanda_id != null) continue;
+    g._multi = true;
+    g._tandas = filas.map((f) => f.tanda_id);
+    tandasDeGasto.set(id, g._tandas);
+  }
 
   // Envío vinculado a una o varias compras (telas o moldes): se parte según lo que costó cada compra
   // y cada parte se suma donde está esa compra, con su mismo concepto.
@@ -106,7 +121,7 @@ export function index(D) {
     muestrasDeProducto: group(D.muestras, "producto_id"),
     noAplica: new Set(D.tandaConceptos.filter((c) => c.estado === "no_aplica").map((c) => `${c.tanda_id}|${c.concepto}`)),
     tandasDeCampana: new Map(), campanasDeTanda: new Map(),
-    tandasDeGasto, vinculosDe, enviosDe, partesDe,
+    tandasDeGasto, filasDeGasto, filaGT, vinculosDe, enviosDe, partesDe,
     multiDeTanda: new Map(),
     packagingDeProducto: group(D.productoPackaging || [], "producto_id"),
     prendasDeCampana: group(D.campanaPrendas || [], "campana_id"),
@@ -119,6 +134,7 @@ export function index(D) {
   I.campaignCache = new Map();
   I.publiColCache = new Map();
   I.multiCache = new Map();
+  I.cache = new Map();
   return I;
 }
 
@@ -195,7 +211,7 @@ export function splitByUnits(totalCents, units) {
 // Costo de fabricación y desarrollo de una tanda (producción, muestras, moldería y packaging), sin campañas ni publicidad.
 function partesFabricacion(I, t) {
   const u = unidades(t);
-  const prod = (I.gastosDeTanda.get(t.id) || []).filter((g) => g.categoria === "produccion");
+  const prod = gastosProduccion(I, t.id).gastos;
   const esPrimera = primeraTanda(I, t.producto_id)?.id === t.id;
   const muestrasG = esPrimera ? gastosMuestras(I, t.producto_id) : [];
   const moldes = esPrimera ? moldesDeProducto(I, t.producto_id, t.id) : [];
@@ -253,16 +269,98 @@ export function publiColeccionInfo(I, coleccionId) {
   return info;
 }
 
-// Publicidad o moldería cargada a varios productos elegidos: se reparte entre las unidades de esas tandas.
+// Datos de un producto (tanda) dentro de un gasto: ventas o avíos por prenda. Un envío repartido usa los de su compra.
+export const filaDe = (I, g, tandaId) => I.filaGT.get(`${(g._parte ? g._ref : g).id}|${tandaId}`) || null;
+
+// Gasto cargado a varios productos elegidos (producción, moldería o publicidad): se reparte entre esas tandas.
+// Por unidades; los avíos, por unidades × avíos que lleva cada prenda; la publicidad de conversión, por lo vendido.
 export function multiInfo(I, g) {
   const k = gkey(g);
   if (I.multiCache.has(k)) return I.multiCache.get(k);
   const tandas = (g._tandas || []).map((id) => I.tanda.get(id));
-  const info = { id: k, gasto: g, ...repartir(M.of(g.moneda, g.monto), tandas, [g]) };
+  const total = M.of(g.moneda, g.monto);
+  let r;
+  if (esConversion(g)) r = repartirVentas(I, g, total, tandas);
+  else if (g.categoria === "produccion" && esAvio(g.concepto)) r = repartir(total, tandas, [g], (p) => p.n * (filaDe(I, g, p.tanda.id)?.por_prenda ?? 1));
+  else r = repartir(total, tandas, [g]);
+  const info = { id: k, gasto: g, ...r };
   I.multiCache.set(k, info);
   return info;
 }
 export const publiMultiInfo = (I, gastoId) => multiInfo(I, I.gasto.get(gastoId));
+
+// Publicidad de conversión: cada producto se lleva una parte según lo que vendió.
+// Si no se vendió nada, la plata igual se gastó: se reparte por unidades producidas (y sube el costo por venta).
+function repartirVentas(I, g, total, tandas) {
+  const parts = tandas.filter(Boolean).map((t) => ({ tanda: t, ...unidades(t), ventas: filaDe(I, g, t.id)?.ventas || 0 }));
+  const totalVentas = parts.reduce((s, p) => s + p.ventas, 0);
+  if (!totalVentas) return { ...repartir(total, tandas, [g]), totalVentas: 0, sinVentas: true };
+  const asignado = new Map(parts.map((p) => [p.tanda.id, {}]));
+  for (const moneda in total) {
+    const split = splitByUnits(total[moneda], parts.map((p) => p.ventas));
+    parts.forEach((p, i) => { if (split[i]) asignado.get(p.tanda.id)[moneda] = split[i]; });
+  }
+  return {
+    gastos: [g], total, parts, totalUnidades: parts.reduce((s, p) => s + (p.n || 0), 0), totalVentas,
+    estado: g.estimado ? "estimado" : "final", asignado, faltan: [],
+  };
+}
+
+// Cómo se reparte un gasto entre tandas: varios productos elegidos o publicidad de toda una colección. null si va entero a una tanda.
+export function repartoInfo(I, g) {
+  if (g._multi) return multiInfo(I, g);
+  if (g.categoria !== "publicidad" || g.coleccion_id == null || g.tanda_id != null) return null;
+  const k = "col" + gkey(g);
+  if (!I.multiCache.has(k)) {
+    const tandas = I.D.tandas.filter((t) => tandaColeccionId(I, t) === g.coleccion_id);
+    I.multiCache.set(k, { id: k, gasto: g, ...repartir(M.of(g.moneda, g.monto), tandas, [g]) });
+  }
+  return I.multiCache.get(k);
+}
+
+// La parte de un gasto repartido que le toca a una tanda, como si fuera un gasto más (con su parte de los kilos).
+// Se sigue sabiendo de qué gasto sale (id) y cuánto era el total.
+function parteDe(I, g, tandaId, monto) {
+  return {
+    ...g, monto, kg: g.kg ? (g.kg * monto) / g.monto : g.kg, tanda_id: tandaId, producto_id: I.tanda.get(tandaId)?.producto_id ?? null,
+    coleccion_id: null, _multi: false, _tandas: null, _reparto: true, _vid: `${gkey(g)}@${tandaId}`,
+  };
+}
+
+// Lo que le toca a una tanda de una categoría: sus gastos enteros y las partes de los repartidos.
+// Los repartos que todavía no se pueden hacer (falta la cantidad de otro producto) quedan en pendientes.
+export function partesDeTanda(I, tandaId, categoria) {
+  const k = `pt${tandaId}|${categoria}`;
+  if (I.cache.has(k)) return I.cache.get(k);
+  const t = I.tanda.get(tandaId);
+  const propios = (I.gastosDeTanda.get(tandaId) || []).filter((g) => g.categoria === categoria);
+  const colId = categoria === "publicidad" && t ? tandaColeccionId(I, t) : null;
+  const repartidos = [
+    ...(I.multiDeTanda.get(tandaId) || []),
+    ...(colId != null ? (I.gastosDeColeccion.get(colId) || []).filter((g) => g.tanda_id == null && !g._multi) : []),
+  ].filter((g) => g.categoria === categoria);
+  const partes = [], pendientes = [];
+  for (const g of repartidos) {
+    const info = repartoInfo(I, g);
+    if (!info) continue;
+    const a = info.asignado.get(tandaId);
+    if (a) { if (M.get(a, g.moneda)) partes.push(parteDe(I, g, tandaId, M.get(a, g.moneda))); }
+    else pendientes.push({ gasto: g, info });
+  }
+  const out = { gastos: [...propios, ...partes], pendientes };
+  I.cache.set(k, out);
+  return out;
+}
+export const gastosProduccion = (I, tandaId) => partesDeTanda(I, tandaId, "produccion");
+
+// Un gasto repartido convertido en sus partes por tanda (si todavía no se puede repartir, queda entero).
+// Producción y publicidad se muestran así por producto; la moldería se sigue viendo por molde.
+export function partesReparto(I, g) {
+  if (g.categoria !== "produccion" && g.categoria !== "publicidad") return [g];
+  const info = repartoInfo(I, g);
+  if (!info || !info.asignado.size) return [g];
+  return [...info.asignado].filter(([, m]) => M.get(m, g.moneda)).map(([tid, m]) => parteDe(I, g, tid, M.get(m, g.moneda)));
+}
 
 // Packaging vinculado al producto: precio por unidad de la compra × cuántos lleva cada prenda × unidades.
 export function packagingInfo(I, productoId, n) {
@@ -274,10 +372,12 @@ export function packagingInfo(I, productoId, n) {
   }).filter((x) => x.gasto);
 }
 
-// Reparte un total entre tandas según sus unidades (finales o, si no hay, estimadas).
-function repartir(total, tandas, gastos) {
+// Reparte un total entre tandas según sus unidades (finales o, si no hay, estimadas), o según el peso que se indique.
+// Con un solo participante va entero a él, aunque todavía no tenga cantidad.
+function repartir(total, tandas, gastos, peso = (p) => p.n) {
   const parts = tandas.filter(Boolean).map((t) => ({ tanda: t, ...unidades(t) }));
-  const faltan = parts.filter((p) => p.n == null);
+  const unico = parts.length === 1;
+  const faltan = unico ? [] : parts.filter((p) => p.n == null);
   let estado;
   if (!parts.length) estado = "sin_productos";
   else if (faltan.length) estado = "falta_cantidad";
@@ -289,7 +389,7 @@ function repartir(total, tandas, gastos) {
   if (estado === "estimado" || estado === "final") {
     for (const p of parts) asignado.set(p.tanda.id, {});
     for (const moneda in total) {
-      const split = splitByUnits(total[moneda], parts.map((p) => p.n));
+      const split = splitByUnits(total[moneda], parts.map((p) => (unico ? 1 : peso(p))));
       parts.forEach((p, i) => { if (split[i]) asignado.get(p.tanda.id)[moneda] = split[i]; });
     }
   }
@@ -299,9 +399,12 @@ function repartir(total, tandas, gastos) {
 /* ---------- Costos de una tanda ---------- */
 
 export function tandaCosts(I, tandaId) {
+  const k = `tc${tandaId}`;
+  if (I.cache.has(k)) return I.cache.get(k);
   const t = I.tanda.get(tandaId);
   const { u, prod, esPrimera, muestrasG, moldes, pack } = partesFabricacion(I, t);
-  const publi = (I.gastosDeTanda.get(tandaId) || []).filter((g) => g.categoria === "publicidad");
+  const prodPend = gastosProduccion(I, tandaId).pendientes;
+  const publi = partesDeTanda(I, tandaId, "publicidad");
   const desa = [...muestrasG, ...moldes.map((x) => x.gasto)];
 
   // De cada campaña, la parte de sus gastos y, aparte, la parte de las prendas entregadas como parte de pago.
@@ -312,21 +415,15 @@ export function tandaCosts(I, tandaId) {
     const gastos = total ? M.add(total, M.scale(prendas || {}, -1)) : null;
     return { campana: I.campana.get(cid), info: c, monto: gastos, montoPrendas: prendas, montoTotal: total };
   });
-
-  const colId = tandaColeccionId(I, t);
-  const pc = colId != null ? publiColeccionInfo(I, colId) : null;
-  const publiCol = pc && !M.isZero(pc.total) ? { coleccion: I.coleccion.get(colId), info: pc, monto: pc.asignado.get(tandaId) || null } : null;
-
-  const publiMulti = (I.multiDeTanda.get(tandaId) || []).filter((g) => g.categoria === "publicidad").map((g) => {
-    const info = multiInfo(I, g);
-    return { gasto: g, info, monto: info.asignado.get(tandaId) || null };
-  });
   const moldesMulti = moldes.filter((x) => x.info);
 
   const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
   const moldeTotal = M.sum(moldes.map((x) => x.monto || {}));
+  const vis = publi.gastos.filter((g) => publiTipo(g) === "visibilidad");
+  const conv = publi.gastos.filter((g) => publiTipo(g) === "conversion");
+  const cp = conversionProducto(I, t.producto_id);
   const lineas = {
-    produccion: { total: tot(prod), gastos: prod },
+    produccion: { total: tot(prod), gastos: prod, pendientes: prodPend },
     muestras: { total: tot(muestrasG), gastos: muestrasG, aplica: esPrimera },
     molderia: { total: moldeTotal, items: moldes, aplica: esPrimera },
     desarrollo: { total: M.add(tot(muestrasG), moldeTotal), gastos: desa, aplica: esPrimera },
@@ -334,8 +431,10 @@ export function tandaCosts(I, tandaId) {
     campana: { total: M.sum(campanas.map((c) => c.monto || {})), campanas },
     prendas: { total: M.sum(campanas.map((c) => c.montoPrendas || {})), campanas: campanas.filter((c) => c.info.prendas.length) },
     publicidad: {
-      total: M.sum([tot(publi), publiCol?.monto || {}, ...publiMulti.map((x) => x.monto || {})]),
-      gastos: publi, coleccion: publiCol, multi: publiMulti,
+      total: tot(publi.gastos), gastos: publi.gastos, pendientes: publi.pendientes,
+      visibilidad: { total: tot(vis), gastos: vis },
+      // La conversión se cuenta por venta: el promedio ponderado del producto, no lo gastado ÷ unidades producidas.
+      conversion: { total: tot(conv), gastos: conv, ventas: conv.reduce((s, g) => s + (filaDe(I, g, tandaId)?.ventas || 0), 0), porVenta: cp.porVenta, producto: cp },
     },
   };
   const fabricacion = M.sum([lineas.produccion.total, lineas.muestras.total, lineas.molderia.total, lineas.packaging.total]);
@@ -351,21 +450,20 @@ export function tandaCosts(I, tandaId) {
   for (const c of campanas) {
     if (c.info.estado === "falta_cantidad") avisos.push(`Reparto de ${c.campana.nombre} pendiente: falta cantidad en ${c.info.faltan.length} producto${c.info.faltan.length > 1 ? "s" : ""}`);
   }
-  if (publiCol?.info.estado === "falta_cantidad" && u.n != null) {
-    const n = publiCol.info.faltan.length;
-    avisos.push(`Reparto de la publicidad de ${publiCol.coleccion?.nombre} pendiente: falta cantidad en ${n} producto${n > 1 ? "s" : ""}`);
-  }
-  for (const x of publiMulti) {
-    if (x.info.estado === "falta_cantidad" && u.n != null) avisos.push(`Reparto de la publicidad “${x.gasto.descripcion || "sin descripción"}” pendiente: falta cantidad en otro producto`);
-  }
-  for (const x of moldesMulti) {
-    if (x.info.estado === "falta_cantidad" && u.n != null) avisos.push(`Reparto de la moldería “${(x.gasto.descripcion || "").trim() || "sin descripción"}” pendiente: falta cantidad en otro producto`);
+  if (u.n != null) {
+    const desc = (g) => `“${(g.descripcion || "").trim() || "sin descripción"}”`;
+    for (const x of publi.pendientes) avisos.push(`Reparto de la publicidad ${x.gasto.coleccion_id ? `de la colección ${I.coleccion.get(x.gasto.coleccion_id)?.nombre || ""}` : desc(x.gasto)} pendiente: falta cantidad en otro producto`);
+    for (const x of prodPend) avisos.push(`Reparto de ${(x.gasto.concepto || "producción").toLowerCase()} ${desc(x.gasto)} pendiente: falta cantidad en otro producto`);
+    for (const x of moldesMulti) {
+      if (x.info.estado === "falta_cantidad") avisos.push(`Reparto de la moldería ${desc(x.gasto)} pendiente: falta cantidad en otro producto`);
+    }
   }
   for (const x of pack) {
     if (x.unit == null) avisos.push(`Packaging ${x.opcion?.nombre || ""}: la compra no tiene la cantidad de unidades`);
   }
-  const repartos = [...campanas, ...(publiCol ? [publiCol] : []), ...publiMulti, ...moldesMulti].map((x) => x.info.estado);
-  const hayEstimados = u.estimada || [...prod, ...desa, ...publi].some((g) => g.estimado) || repartos.includes("estimado");
+  const repartos = [...campanas.map((x) => x.info.estado), ...moldesMulti.map((x) => x.info.estado),
+    ...[...publi.pendientes, ...prodPend].map((x) => x.info.estado)];
+  const hayEstimados = u.estimada || [...prod, ...desa, ...publi.gastos].some((g) => g.estimado) || repartos.includes("estimado");
 
   let estado;
   if (t.cerrada) estado = "cerrado";
@@ -373,10 +471,106 @@ export function tandaCosts(I, tandaId) {
   else if (hayEstimados) estado = "estimado";
   else estado = "al_dia";
 
-  return {
+  const out = {
     tanda: t, unidades: u, esPrimera, lineas, fabricacion, directo, estado, avisos, conceptosPendientes, estadoProd: estadoProduccion(I, t),
     tela: telaInfo(prod, u.n),
     porUnidad: (m) => (u.n ? M.scale(m, 1 / u.n) : null),
+    directoUnit: directoPorUnidad(directo, lineas.publicidad.conversion, u.n),
+  };
+  I.cache.set(k, out);
+  return out;
+}
+
+// Costo directo por unidad: todo lo que se divide por las unidades producidas, más el costo por venta de la conversión.
+// Si la conversión todavía no tiene ventas, se divide como lo demás.
+function directoPorUnidad(directo, conv, n) {
+  if (!n) return null;
+  if (!conv.porVenta || M.isZero(conv.total)) return M.scale(directo, 1 / n);
+  return M.add(M.scale(M.add(directo, M.scale(conv.total, -1)), 1 / n), conv.porVenta);
+}
+
+/* ---------- Publicidad de un producto ---------- */
+
+// Conversión del producto, en todas sus tandas: lo gastado ÷ lo vendido (promedio ponderado por ventas).
+export function conversionProducto(I, productoId) {
+  const k = `cv${productoId}`;
+  if (I.cache.has(k)) return I.cache.get(k);
+  const cargas = [];
+  for (const t of I.tandasDeProducto.get(productoId) || []) {
+    for (const g of partesDeTanda(I, t.id, "publicidad").gastos) {
+      if (publiTipo(g) !== "conversion") continue;
+      cargas.push({ gasto: I.gasto.get(g.id) || g, parte: g, tanda: t, monto: M.of(g.moneda, g.monto), ventas: filaDe(I, g, t.id)?.ventas || 0 });
+    }
+  }
+  cargas.sort((a, b) => b.gasto.fecha.localeCompare(a.gasto.fecha) || b.gasto.id - a.gasto.id);
+  const gastado = M.sum(cargas.map((c) => c.monto));
+  const ventas = cargas.reduce((s, c) => s + c.ventas, 0);
+  const out = { cargas, gastado, ventas, porVenta: ventas ? M.scale(gastado, 1 / ventas) : null };
+  I.cache.set(k, out);
+  return out;
+}
+
+// Toda la publicidad de un producto: conversión (por venta) y visibilidad/tráfico (por unidad producida), con cada carga.
+export function publicidadProducto(I, productoId) {
+  const conv = conversionProducto(I, productoId);
+  const tandas = (I.tandasDeProducto.get(productoId) || []).slice().sort((a, b) => a.id - b.id);
+  const porTanda = tandas.map((t) => {
+    const L = tandaCosts(I, t.id).lineas.publicidad;
+    return { tanda: t, u: unidades(t), visibilidad: L.visibilidad.total, gastosVis: L.visibilidad.gastos, conversion: L.conversion.total, ventas: L.conversion.ventas, pendientes: L.pendientes };
+  });
+  const conVis = porTanda.filter((x) => !M.isZero(x.visibilidad));
+  const visTotal = M.sum(porTanda.map((x) => x.visibilidad));
+  const visUnidades = conVis.reduce((s, x) => s + (x.u.n || 0), 0);
+  const visCargas = porTanda.flatMap((x) => x.gastosVis.map((g) => ({ gasto: I.gasto.get(g.id) || g, parte: g, tanda: x.tanda, monto: M.of(g.moneda, g.monto), n: x.u.n })))
+    .sort((a, b) => b.gasto.fecha.localeCompare(a.gasto.fecha) || b.gasto.id - a.gasto.id);
+  return {
+    conversion: conv,
+    visibilidad: { total: visTotal, unidades: visUnidades, porUnidad: visUnidades ? M.scale(visTotal, 1 / visUnidades) : null, cargas: visCargas },
+    total: M.add(conv.gastado, visTotal), porTanda,
+    pendientes: porTanda.flatMap((x) => x.pendientes),
+  };
+}
+
+/* ---------- Balance general de un producto (todas sus tandas) ---------- */
+
+export function productoBalance(I, productoId) {
+  const tcs = (I.tandasDeProducto.get(productoId) || []).slice().sort((a, b) => a.id - b.id).map((t) => tandaCosts(I, t.id));
+  const sumL = (key) => M.sum(tcs.map((c) => c.lineas[key].total));
+  const flat = (f) => tcs.flatMap(f);
+  const conUnidades = tcs.filter((c) => c.unidades.n != null);
+  const n = conUnidades.reduce((s, c) => s + c.unidades.n, 0) || null;
+  const u = { n, estimada: conUnidades.some((c) => c.unidades.estimada) };
+  const primera = tcs.find((c) => c.esPrimera) || tcs[0];
+  const conv = conversionProducto(I, productoId);
+  const prod = flat((c) => c.lineas.produccion.gastos);
+  const pubG = flat((c) => c.lineas.publicidad.gastos);
+  const lineas = {
+    produccion: { total: sumL("produccion"), gastos: prod, pendientes: flat((c) => c.lineas.produccion.pendientes) },
+    muestras: { ...primera.lineas.muestras, aplica: true },
+    molderia: { ...primera.lineas.molderia, aplica: true },
+    // El mismo packaging vinculado aparece en cada tanda: se junta en una fila con lo de todas.
+    packaging: { total: sumL("packaging"), items: [...flat((c) => c.lineas.packaging.items).reduce((m, x) => {
+      const prev = m.get(x.link.id);
+      m.set(x.link.id, prev ? { ...prev, monto: x.monto ? M.add(prev.monto || {}, x.monto) : prev.monto } : x);
+      return m;
+    }, new Map()).values()] },
+    campana: { total: sumL("campana"), campanas: flat((c) => c.lineas.campana.campanas) },
+    prendas: { total: sumL("prendas"), campanas: flat((c) => c.lineas.prendas.campanas) },
+    publicidad: {
+      total: sumL("publicidad"), gastos: pubG, pendientes: flat((c) => c.lineas.publicidad.pendientes),
+      visibilidad: { total: M.sum(tcs.map((c) => c.lineas.publicidad.visibilidad.total)), gastos: pubG.filter((g) => publiTipo(g) === "visibilidad") },
+      conversion: { total: conv.gastado, gastos: pubG.filter((g) => publiTipo(g) === "conversion"), ventas: conv.ventas, porVenta: conv.porVenta, producto: conv },
+    },
+  };
+  const fabricacion = M.sum([lineas.produccion.total, lineas.muestras.total, lineas.molderia.total, lineas.packaging.total]);
+  const directo = M.sum([fabricacion, lineas.campana.total, lineas.prendas.total, lineas.publicidad.total]);
+  const sinCantidad = tcs.filter((c) => c.unidades.n == null && !M.isZero(c.directo));
+  return {
+    general: true, tandas: tcs, unidades: u, lineas, fabricacion, directo, tela: telaInfo(prod, n),
+    estadoProd: tcs.every((c) => c.tanda.cerrada) ? "finalizada" : tcs.some((c) => c.estadoProd !== "preparacion") ? "produccion" : "preparacion",
+    avisos: sinCantidad.map((c) => `${c.tanda.nombre}: falta la cantidad; sus gastos suman pero sus unidades no`),
+    porUnidad: (m) => (n ? M.scale(m, 1 / n) : null),
+    directoUnit: directoPorUnidad(directo, lineas.publicidad.conversion, n),
   };
 }
 
@@ -452,6 +646,141 @@ export function estampaInfo(gastos) {
   }).filter((x) => x.gastos.length);
 }
 
+/* ---------- Simulación de costos unitarios ---------- */
+
+// Cómo se comporta cada costo si se producen otras cantidades:
+// - Por unidad (no cambia el unitario): tela (kilos por prenda × precio del kilo), corte, confección, lavadero,
+//   bordado, serigrafía ajena, DTF, packaging y la conversión de la publicidad (costo por venta).
+// - Fijos (el total queda igual y se divide por las unidades nuevas): muestras, moldería, campañas, prendas entregadas,
+//   publicidad de visibilidad/tráfico y serigrafía estampada por mí.
+// - Avíos: se compran por cantidad. Mientras alcance la compra, el total se divide por las unidades nuevas;
+//   cuando hace falta comprar más, cada prenda paga lo que usa (avíos por prenda × precio de cada avío).
+// La simulación solo guarda las unidades y los cambios (por clave de ítem). Lo demás sale de los datos reales.
+export const SIM_ESTAMPA = ["bordado", "serigrafia", "serigrafia_propia", "dtf"];
+
+export function simulacionCostos(I, tandaId, sim) {
+  const tc = tandaCosts(I, tandaId);
+  const n = tc.unidades.n, N = Number(sim.unidades) || 0;
+  if (!n || !N) return null;
+  const ch = sim.cambios || {};
+  const ars = (c) => M.of("ARS", Math.round(c));
+  const porN = (m) => M.scale(m, 1 / n);
+  const tot = (gs) => M.sum(gs.map((g) => M.of(g.moneda, g.monto)));
+  const prod = tc.lineas.produccion.gastos;
+  const items = [];
+
+  // Por unidad: el unitario real (total ÷ unidades reales) o el que se cargó; el total sale × unidades nuevas.
+  const porUnidad = (key, concepto, nombre, gs, extra = {}) => {
+    const c = ch[key];
+    const unitBase = porN(tot(gs));
+    const unitSim = c?.unit != null ? ars(c.unit) : unitBase;
+    items.push({ key, concepto, nombre: c?.nombre || nombre, nombreBase: nombre, modo: "unit", gastos: gs, unitBase, unitSim,
+      totalSim: M.scale(unitSim, N), modificado: !!c, noCorresponde: !gs.length && !c, ...extra });
+  };
+  // Fijo: el total real (o el que se cargó) dividido por las unidades nuevas.
+  const fijo = (key, concepto, nombre, gs, extra = {}) => {
+    const c = ch[key];
+    const totalBase = tot(gs);
+    const totalSim = c?.total != null ? ars(c.total) : totalBase;
+    items.push({ key, concepto, nombre, nombreBase: nombre, modo: "fijo", gastos: gs, totalBase, unitBase: porN(totalBase), totalSim,
+      unitSim: M.scale(totalSim, 1 / N), modificado: !!c, noCorresponde: !gs.length && !c, ...extra });
+  };
+
+  // Tela: cada una por su nombre. Con kilos, el unitario es el consumo por prenda × el precio del kilo (que se puede cambiar).
+  const telas = new Map();
+  for (const g of prod.filter((g) => esTela(g.concepto) && !g.envio)) {
+    const nombre = telaNombre(g), k = nombre.toLowerCase();
+    if (!telas.has(k)) telas.set(k, { nombre, gastos: [] });
+    telas.get(k).gastos.push(g);
+  }
+  for (const [k, x] of telas) {
+    const key = `tela:${k}`, c = ch[key];
+    const kg = x.gastos.reduce((s, g) => s + (g.kg || 0), 0);
+    if (!kg) { porUnidad(key, "Tela", x.nombre, x.gastos); continue; }
+    const total = tot(x.gastos);
+    const precioKg = M.scale(total, 1 / kg), kgU = kg / n;
+    const precioSim = c?.precioKg != null ? ars(c.precioKg) : precioKg;
+    const unitSim = M.scale(precioSim, kgU);
+    items.push({ key, concepto: "Tela", nombre: c?.nombre || x.nombre, nombreBase: x.nombre, modo: "kg", gastos: x.gastos, kg, kgU, precioKg, precioSim,
+      unitBase: porN(total), unitSim, totalSim: M.scale(unitSim, N), modificado: !!c });
+  }
+  const envTela = prod.filter((g) => esTela(g.concepto) && g.envio);
+  if (envTela.length || ch.tela_envio) porUnidad("tela_envio", "Tela", "Envíos de tela", envTela);
+
+  // Corte, confección, lavadero y cualquier otro concepto (con sus envíos): el unitario no cambia.
+  const otros = new Map();
+  for (const g of prod.filter((g) => !esTela(g.concepto) && !esEstampa(g.concepto) && !esAvio(g.concepto))) {
+    const c = g.concepto || "Sin concepto";
+    if (!otros.has(c)) otros.set(c, []);
+    otros.get(c).push(g);
+  }
+  const conceptos = I.D.opciones.filter((o) => o.tipo === "concepto_prod" && !o.archivada && !esTela(o.nombre) && !esEstampa(o.nombre) && !esAvio(o.nombre)).map((o) => o.nombre);
+  for (const c of [...new Set([...conceptos, ...otros.keys()])]) porUnidad(`conc:${c.toLowerCase()}`, c, c, otros.get(c) || []);
+
+  // Estampa: los cuatro métodos, se usen o no. La serigrafía estampada por mí es un total que se divide.
+  const est = prod.filter((g) => esEstampa(g.concepto));
+  for (const k of SIM_ESTAMPA) {
+    const gs = est.filter((g) => !g.envio && g.estampa === k);
+    if (k === "serigrafia_propia") fijo(`estampa:${k}`, "Estampa", ESTAMPA[k], gs);
+    else porUnidad(`estampa:${k}`, "Estampa", ESTAMPA[k], gs);
+  }
+  const estOtros = est.filter((g) => g.envio || !ESTAMPA[g.estampa]);
+  if (estOtros.length) porUnidad("estampa:otros", "Estampa", "Estampa sin tipo y envíos", estOtros);
+
+  // Avíos: cada compra. Si se sabe cuántos se compraron y cuántos lleva cada prenda, se usa el contador.
+  for (const g of prod.filter((g) => esAvio(g.concepto) && !g.envio)) {
+    const real = I.gasto.get(g.id) || g;
+    const key = `avio:${real.id}`, c = ch[key];
+    const share = M.of(g.moneda, g.monto);                 // lo que le toca a este producto de la compra
+    const f = real.monto ? g.monto / real.monto : 1;        // qué parte de la compra es de este producto
+    const Q = real.cantidad || null, pp = filaDe(I, g, tandaId)?.por_prenda || null;
+    const nombre = (real.descripcion || "").trim() || "Avíos";
+    const totalSim = c?.total != null ? ars(c.total) : share;
+    if (!Q || !pp) {
+      items.push({ key, concepto: "Avíos", nombre, nombreBase: nombre, modo: "fijo", gastos: [g], totalBase: share, unitBase: porN(share), totalSim,
+        unitSim: M.scale(totalSim, 1 / N), modificado: !!c, sinContador: true, compra: real });
+      continue;
+    }
+    const precioBase = M.of(real.moneda, real.monto / Q);
+    const precio = c?.unit != null ? ars(c.unit) : precioBase;
+    const porUso = M.scale(precio, N * pp);
+    const usaContador = M.get(porUso) > M.get(totalSim);
+    const costo = usaContador ? porUso : totalSim;
+    items.push({ key, concepto: "Avíos", nombre, nombreBase: nombre, modo: "avio", gastos: [g], compra: real, cantidad: Q, cantidadProducto: f * Q, porPrenda: pp,
+      precioBase, precio, totalBase: share, unitBase: porN(share), totalSim: costo, unitSim: M.scale(costo, 1 / N), compraSim: totalSim,
+      sinDesperdicioDesde: Math.ceil((f * Q) / pp), sinDesperdicio: usaContador, modificado: !!c });
+  }
+  const avEnv = prod.filter((g) => esAvio(g.concepto) && g.envio);
+  if (avEnv.length) fijo("avio_envio", "Avíos", "Envíos de avíos", avEnv);
+
+  // El resto del balance: lo fijo se divide por las unidades nuevas; packaging y conversión mantienen su unitario.
+  const L = tc.lineas;
+  const linea = (total, unitReal) => ({ total, unit: M.scale(total, 1 / N), unitReal });
+  const fijoL = (m) => linea(m, porN(m));
+  const packU = porN(L.packaging.total);
+  const conv = L.publicidad.conversion;
+  const convU = conv.porVenta || (M.isZero(conv.total) ? {} : porN(conv.total));
+  const produccion = M.sum(items.map((x) => x.totalSim));
+  const lineas = {
+    produccion: { ...linea(produccion, porN(L.produccion.total)), items },
+    muestras: { ...fijoL(L.muestras.total), aplica: L.muestras.aplica },
+    molderia: { ...fijoL(L.molderia.total), aplica: L.molderia.aplica },
+    packaging: linea(M.scale(packU, N), packU),
+    campana: fijoL(L.campana.total),
+    prendas: fijoL(L.prendas.total),
+    visibilidad: fijoL(L.publicidad.visibilidad.total),
+    conversion: { total: M.scale(convU, N), unit: convU, unitReal: convU, porVenta: !!conv.porVenta },
+  };
+  const fabricacion = M.sum(["produccion", "muestras", "molderia", "packaging"].map((k) => lineas[k].total));
+  const directo = M.sum([fabricacion, ...["campana", "prendas", "visibilidad", "conversion"].map((k) => lineas[k].total)]);
+  return {
+    tc, n, N, items, lineas, fabricacion, directo,
+    fabricacionUnit: M.scale(fabricacion, 1 / N), directoUnit: M.scale(directo, 1 / N),
+    real: { fabricacionUnit: tc.porUnidad(tc.fabricacion), directoUnit: tc.directoUnit },
+    pendientes: L.produccion.pendientes.length,
+  };
+}
+
 /* ---------- Producto (resumen para tarjeta) ---------- */
 
 export function productoResumen(I, productoId) {
@@ -491,9 +820,10 @@ export function coleccionCosts(I, coleccionId) {
   const seen = new Set();
   const take = (gs) => gs.filter((g) => !seen.has(gkey(g)) && seen.add(gkey(g)));
 
-  const prod = take(I.gastos.filter((g) => g.categoria === "produccion" && tandaSet.has(g.tanda_id))).map(item);
-  const publi = take(I.gastos.filter((g) => g.categoria === "publicidad" &&
-    (tandaSet.has(g.tanda_id) || (!g.tanda_id && g.coleccion_id === coleccionId) || (g._tandas || []).some((id) => tandaSet.has(id))))).map(item);
+  // Producción y publicidad por tanda, con la parte que le toca de cada gasto repartido:
+  // si un gasto se comparte con productos de otra colección, acá solo suma su parte.
+  const prod = take(tandas.flatMap((t) => gastosProduccion(I, t.id).gastos)).map(item);
+  const publi = take(tandas.flatMap((t) => partesDeTanda(I, t.id, "publicidad").gastos)).map(item);
   const productos = [...new Set(tandas.map((t) => t.producto_id))];
   // El desarrollo se cuenta en la colección de la primera tanda de cada producto.
   const primeras = productos.map((pid) => primeraTanda(I, pid)).filter((t) => t && tandaSet.has(t.id));
@@ -513,6 +843,20 @@ export function coleccionCosts(I, coleccionId) {
     campana: linea(camp, (x) => ({ key: `c${x.gasto.campana_id}`, nombre: I.campana.get(x.gasto.campana_id)?.nombre || "Campaña", ruta: `#/campana/${x.gasto.campana_id}` })),
     publicidad: linea(publi),
   };
+  L.publicidad.porProducto = productos.map((pid) => {
+    const ts = tandas.filter((t) => t.producto_id === pid);
+    const ids = new Set(ts.map((t) => t.id));
+    const gs = publi.filter((x) => ids.has(x.gasto.tanda_id)).map((x) => x.gasto);
+    const vis = sumGastos(gs.filter((g) => publiTipo(g) === "visibilidad"));
+    const conUnidades = ts.filter((t) => unidades(t).n != null);
+    const n = conUnidades.reduce((s, t) => s + unidades(t).n, 0) || null;
+    const cp = conversionProducto(I, pid);
+    return {
+      producto: I.producto.get(pid), tandas: ts, n, estimada: conUnidades.some((t) => unidades(t).estimada), faltaCantidad: conUnidades.length < ts.length,
+      visibilidad: vis, visPorUnidad: n && !M.isZero(vis) ? M.scale(vis, 1 / n) : null,
+      conversion: sumGastos(gs.filter((g) => publiTipo(g) === "conversion")), porVenta: cp.porVenta, ventas: cp.ventas,
+    };
+  }).filter((x) => x.producto);
   L.desarrollo = { total: M.add(L.muestras.total, L.molderia.total), gastos: [...L.muestras.gastos, ...L.molderia.gastos] };
   // Prendas entregadas como parte de pago en sus campañas. Se muestran, pero no se vuelven a sumar al costo total:
   // fabricarlas ya está contado en Producción, muestras y moldería de la colección.
@@ -532,9 +876,14 @@ export function coleccionCosts(I, coleccionId) {
 
 /* ---------- Balance de un período (Resumen) ---------- */
 
-export const inPeriod = (fecha, per) => (per.length === 4 ? fecha.startsWith(per) : monthKey(fecha) === per);
-const perDesde = (per) => (per.length === 4 ? `${per}-01-01` : `${per}-01`);
-const perHasta = (per) => (per.length === 4 ? `${per}-12-31` : `${per}-31`);
+// Un período es un mes (2026-10), un año (2026) o un rango personalizado de días (2026-10-01..2026-10-15).
+export const esRango = (per) => per.includes("..");
+export const perDesde = (per) => (esRango(per) ? per.split("..")[0] : per.length === 4 ? `${per}-01-01` : `${per}-01`);
+export const perHasta = (per) => (esRango(per) ? per.split("..")[1] : per.length === 4 ? `${per}-12-31` : `${per}-31`);
+export const inPeriod = (fecha, per) => {
+  if (esRango(per)) { const [d, h] = per.split(".."); return fecha >= d && fecha <= h; }
+  return per.length === 4 ? fecha.startsWith(per) : monthKey(fecha) === per;
+};
 
 // Una muestra marcada "no se va a producir" pasa a ser un gasto extra de la marca.
 export const muestraNoProducida = (I, g) => g.categoria === "muestras" && !!I.muestra.get(g.muestra_id)?.no_produce;
@@ -576,7 +925,7 @@ export const expandir = (I, gastos) => gastos.flatMap((g) => I.partesDe.get(g.id
 
 // Producción + muestras + moldería = producir ropa; + campañas y publicidad = producir y vender. El resto va aparte.
 export function balancePeriodo(I, gastos) {
-  gastos = expandir(I, gastos);
+  gastos = expandir(I, gastos).flatMap((g) => partesReparto(I, g));
   const of = (cat) => gastos.filter((g) => g.categoria === cat);
   const linea = (key, nombre, gs, porNombre = true) => ({ key, nombre, gastos: gs, total: sumGastos(gs), grupos: porNombre ? agrupar(I, gs) : null });
   const produccion = linea("produccion", "Producción", of("produccion"));
@@ -584,6 +933,11 @@ export function balancePeriodo(I, gastos) {
   const molderia = linea("molderia", "Moldería todos los talles", of("molderia"));
   const campanas = linea("campanas", "Campañas de contenido de colecciones", of("campanas"));
   const publicidad = linea("publicidad", "Publicidad", of("publicidad"));
+  // Al desplegar Publicidad se ven primero los dos tipos y, adentro de cada uno, cuánto le tocó a cada producto.
+  publicidad.tipos = Object.entries(PUBLI).map(([key, nombre]) => {
+    const gs = publicidad.gastos.filter((g) => publiTipo(g) === key);
+    return { key, nombre, gastos: gs, total: sumGastos(gs), grupos: agrupar(I, gs) };
+  }).filter((x) => x.gastos.length);
   const producir = M.sum([produccion.total, muestras.total, molderia.total]);
   const vender = M.sum([producir, campanas.total, publicidad.total]);
   // Postventa, comisiones y administración van juntas en "Otros gastos", separadas por tipo.
@@ -630,7 +984,7 @@ function fechaCierre(I, t) {
 // En qué paso está una tanda al final del período.
 export function pasoTanda(I, t, hasta) {
   if (t.cerrada && fechaCierre(I, t) <= hasta) return { estado: "Terminado", hecho: null, sigue: null, terminado: true };
-  const prod = (I.gastosDeTanda.get(t.id) || []).filter((g) => g.categoria === "produccion" && g.fecha <= hasta);
+  const prod = gastosProduccion(I, t.id).gastos.filter((g) => g.fecha <= hasta);
   let ultimo = -1;
   for (const g of prod) PASOS.forEach((p, i) => { if (p.re.test(g.concepto || "") && i > ultimo) ultimo = i; });
   if (ultimo < 0) return { estado: prod.length ? "En producción" : "Por empezar", hecho: null, sigue: null, terminado: false };
@@ -665,7 +1019,7 @@ export function conclusionPeriodo(I, per) {
     const tandas = I.D.tandas.filter((t) => tandaColeccionId(I, t) === colId && (t.creado || "").slice(0, 10) <= hasta &&
       !I.producto.get(t.producto_id)?.archivado);
     const ids = new Set(tandas.map((t) => t.id));
-    const todos = I.gastos.filter((g) => g.categoria === "produccion" && ids.has(g.tanda_id));
+    const todos = tandas.flatMap((t) => gastosProduccion(I, t.id).gastos);
     const inicio = todos.reduce((min, g) => (!min || g.fecha < min ? g.fecha : min), null);
     const pasos = tandas.map((t) => ({ tanda: t, producto: I.producto.get(t.producto_id), ...pasoTanda(I, t, hasta) }));
     const terminada = pasos.length > 0 && pasos.every((p) => p.terminado);
@@ -676,7 +1030,7 @@ export function conclusionPeriodo(I, per) {
       coleccion: colId != null ? I.coleccion.get(colId) : null,
       estado: empezo && termino ? "completa" : termino ? "terminada" : empezo ? "comenzada" : terminada ? "terminada_antes" : "en_curso",
       gastado: sumGastos(prodGastos.filter((g) => ids.has(g.tanda_id))),
-      productos: pasos.filter((p) => (I.gastosDeTanda.get(p.tanda.id) || []).some((g) => g.fecha <= hasta) || p.terminado),
+      productos: pasos.filter((p) => gastosProduccion(I, p.tanda.id).gastos.some((g) => g.fecha <= hasta) || p.terminado),
     };
   }).sort((a, b) => ars(b.gastado) - ars(a.gastado));
 

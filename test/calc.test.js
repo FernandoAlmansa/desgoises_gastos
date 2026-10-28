@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   index, campaignInfo, tandaCosts, coleccionCosts, pagoInfo, splitByUnits, avisos,
   generalesDelMes, simularCobertura, faltaAsignar, M, balancePeriodo, conclusionPeriodo, estampaInfo, pasoTanda, inPeriod,
-  estadoProduccion, costoFabricacion,
+  estadoProduccion, costoFabricacion, repartoInfo, conversionProducto, productoBalance, simulacionCostos, partesReparto,
 } from "../public/js/calc.js";
 
 const $ = (pesos) => pesos * 100;
@@ -161,7 +161,8 @@ test("publicidad de una colección se reparte por unidades entre sus productos",
   // 20 + 40 + 40 unidades estimadas
   assert.equal(M.get(tandaCosts(I, 1).lineas.publicidad.total), $(20000));
   assert.equal(M.get(tandaCosts(I, 2).lineas.publicidad.total), $(40000));
-  assert.equal(tandaCosts(I, 2).lineas.publicidad.coleccion.info.estado, "estimado");
+  assert.equal(repartoInfo(I, I.gasto.get(20)).estado, "estimado");
+  assert.equal(tandaCosts(I, 2).lineas.publicidad.gastos[0].publi_tipo ?? "visibilidad", "visibilidad");
   // En la colección se cuenta una sola vez
   assert.equal(M.get(coleccionCosts(I, 1).lineas.publicidad.total), $(100000));
 });
@@ -188,8 +189,8 @@ test("Publicidad a varios productos: se reparte por unidades solo entre los eleg
   assert.equal(M.get(tandaCosts(I, 2).lineas.publicidad.total), $(40000));
   assert.equal(M.get(tandaCosts(I, 3).lineas.publicidad.total), 0);
   assert.equal(faltaAsignar(I.gasto.get(20)), false);
-  // En la colección se cuenta una sola vez.
-  assert.equal(coleccionCosts(I, 1).lineas.publicidad.gastos.filter((g) => g.id === 20).length, 1);
+  // En la colección se cuenta una sola vez: sus partes suman el gasto entero.
+  assert.equal(coleccionCosts(I, 1).lineas.publicidad.gastos.filter((g) => g.id === 20).reduce((s, g) => s + g.monto, 0), $(60000));
 });
 
 test("Packaging vinculado: precio por unidad de la compra × por prenda × unidades, dentro de fabricación", () => {
@@ -261,7 +262,7 @@ test("Moldería de todos los talles para varios productos: se reparte por unidad
   const I = index(D);
   assert.equal(M.get(tandaCosts(I, 1).lineas.molderia.total), $(30000));
   assert.equal(M.get(tandaCosts(I, 2).lineas.molderia.total), $(60000));
-  assert.equal(tandaCosts(I, 2).lineas.publicidad.multi.length, 0); // no se confunde con publicidad
+  assert.equal(tandaCosts(I, 2).lineas.publicidad.gastos.length, 0); // no se confunde con publicidad
   assert.equal(faltaAsignar(I.gasto.get(40)), false);
   // En la colección y en el Resumen se cuenta una sola vez y entera.
   assert.equal(M.get(coleccionCosts(I, 1).lineas.molderia.total), $(90000));
@@ -314,4 +315,106 @@ test("Prendas entregadas como parte de pago: suman su costo de fabricación a la
   const col = coleccionCosts(I, 1);
   assert.equal(M.get(col.lineas.prendas.total), $(60000));
   assert.equal(M.get(col.total), M.get(coleccionCosts(index(base()), 1).total));
+});
+
+test("Publicidad de conversión: se reparte por lo vendido y el costo por venta es el promedio ponderado", () => {
+  const D = base();
+  // 150.000 con 10 ventas de la campera y 20 del crewneck negro → 50.000 y 100.000 (5.000 por venta).
+  D.gastos.push({ id: 50, fecha: "2026-10-14", monto: $(150000), moneda: "ARS", categoria: "publicidad", publi_tipo: "conversion" });
+  // Segunda carga, solo la campera: 18.000 con 2 ventas (9.000 por venta).
+  D.gastos.push({ id: 51, fecha: "2026-10-28", monto: $(18000), moneda: "ARS", categoria: "publicidad", publi_tipo: "conversion", producto_id: 1, tanda_id: 1 });
+  D.gastoTandas = [{ gasto_id: 50, tanda_id: 1, ventas: 10 }, { gasto_id: 50, tanda_id: 2, ventas: 20 }, { gasto_id: 51, tanda_id: 1, ventas: 2 }];
+  const I = index(D);
+  const tc1 = tandaCosts(I, 1);
+  assert.equal(M.get(tc1.lineas.publicidad.conversion.total), $(68000));
+  // Ponderado: (50.000 + 18.000) ÷ 12 ventas = 5.666,67 (no el promedio simple de 5.000 y 9.000).
+  assert.equal(Math.round(M.get(conversionProducto(I, 1).porVenta)), Math.round($(68000) / 12));
+  assert.equal(M.get(tandaCosts(I, 2).lineas.publicidad.conversion.total), $(100000));
+  // El costo directo por unidad suma el costo por venta, no lo gastado ÷ unidades producidas.
+  const sinConv = M.get(tc1.directo) - $(68000);
+  assert.equal(Math.round(M.get(tc1.directoUnit)), Math.round(sinConv / 20 + $(68000) / 12));
+  // En el Resumen se ve por tipo y por producto.
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-10")));
+  const conv = B.publicidad.tipos.find((x) => x.key === "conversion");
+  assert.equal(M.get(conv.total), $(168000));
+  assert.deepEqual(conv.grupos.map((x) => [x.nombre, M.get(x.total)]), [["Crewneck negro", $(100000)], ["Campera zip", $(68000)]]);
+});
+
+test("Conversión sin ventas: la plata se reparte por unidades y sube el costo por venta", () => {
+  const D = base();
+  D.gastos.push({ id: 50, fecha: "2026-10-14", monto: $(60000), moneda: "ARS", categoria: "publicidad", publi_tipo: "conversion" });
+  D.gastos.push({ id: 51, fecha: "2026-10-20", monto: $(10000), moneda: "ARS", categoria: "publicidad", publi_tipo: "conversion", producto_id: 1, tanda_id: 1 });
+  D.gastoTandas = [{ gasto_id: 50, tanda_id: 1, ventas: 0 }, { gasto_id: 50, tanda_id: 2, ventas: 0 }, { gasto_id: 51, tanda_id: 1, ventas: 5 }];
+  const I = index(D);
+  assert.equal(repartoInfo(I, I.gasto.get(50)).sinVentas, true);
+  // 60.000 por unidades (20 y 40) → la campera se lleva 20.000; con las 5 ventas de la otra carga: 30.000 ÷ 5.
+  assert.equal(M.get(conversionProducto(I, 1).porVenta), $(6000));
+});
+
+test("Producción para varios productos: se reparte por unidades; los avíos, por lo que lleva cada prenda", () => {
+  const D = base();
+  // Serigrafía por mí para la campera (20 u.) y el crewneck negro (40 u.).
+  D.gastos.push({ id: 60, fecha: "2026-10-08", monto: $(30000), moneda: "ARS", categoria: "produccion", concepto: "Estampa", estampa: "serigrafia_propia" });
+  // 100 avíos por 50.000: la campera lleva 2 por prenda (40) y el crewneck 1 (40) → mitad y mitad.
+  D.gastos.push({ id: 61, fecha: "2026-10-08", monto: $(50000), moneda: "ARS", categoria: "produccion", concepto: "Avíos", cantidad: 100 });
+  D.gastoTandas = [{ gasto_id: 60, tanda_id: 1 }, { gasto_id: 60, tanda_id: 2 },
+    { gasto_id: 61, tanda_id: 1, por_prenda: 2 }, { gasto_id: 61, tanda_id: 2, por_prenda: 1 }];
+  const I = index(D);
+  const p1 = tandaCosts(I, 1).lineas.produccion.gastos;
+  assert.equal(p1.find((g) => g.id === 60).monto, $(10000));
+  assert.equal(p1.find((g) => g.id === 61).monto, $(25000));
+  assert.equal(faltaAsignar(I.gasto.get(60)), false);
+  // En el Resumen la producción se ve por producto, y suma el gasto entero.
+  const B = balancePeriodo(I, I.D.gastos.filter((g) => inPeriod(g.fecha, "2026-10")));
+  assert.equal(M.get(B.produccion.total), $(880000));
+  assert.ok(B.produccion.grupos.some((x) => x.nombre === "Campera zip"));
+  assert.equal(M.get(coleccionCosts(I, 1).lineas.produccion.total), $(880000));
+});
+
+test("Balance general del producto: suma todas las tandas y el desarrollo una sola vez", () => {
+  const D = base();
+  D.tandas.push({ id: 4, producto_id: 2, nombre: "Restock 1", cant_estimada: null, cant_final: 20, cerrada: 0 });
+  D.gastos.push({ id: 70, fecha: "2026-10-20", monto: $(200000), moneda: "ARS", categoria: "produccion", producto_id: 2, tanda_id: 4, concepto: "Tela" });
+  const I = index(D);
+  const b = productoBalance(I, 2);
+  assert.equal(b.unidades.n, 60);
+  assert.equal(M.get(b.lineas.produccion.total), $(1000000));
+  assert.equal(M.get(b.directo), M.get(tandaCosts(I, 2).directo) + M.get(tandaCosts(I, 4).directo));
+});
+
+test("Simulación: unitarios que se mantienen, fijos que se dividen y el contador de avíos", () => {
+  const D = base();
+  D.tandas[1].cant_final = 20; D.tandas[1].cant_estimada = null;          // crewneck negro: 20 u. reales
+  D.gastos.find((g) => g.id === 4).kg = 10;                              // tela 500.000 / 10 kg = 50.000 el kg
+  D.gastos.push({ id: 80, fecha: "2026-10-08", monto: $(10000), moneda: "ARS", categoria: "produccion", tanda_id: 2, concepto: "Estampa", estampa: "serigrafia_propia" });
+  D.gastos.push({ id: 81, fecha: "2026-10-08", monto: $(20000), moneda: "ARS", categoria: "produccion", tanda_id: 2, concepto: "Avíos", cantidad: 100 });
+  D.gastoTandas = [{ gasto_id: 81, tanda_id: 2, por_prenda: 2 }];
+  const I = index(D);
+  const s = simulacionCostos(I, 2, { unidades: 100, cambios: {} });
+  const it = (k) => s.items.find((x) => x.key === k);
+  // Tela: 0,5 kg por prenda × 50.000 = 25.000 por unidad, igual que antes.
+  assert.equal(M.get(it("tela:tela").unitSim), $(25000));
+  // Confección: 300.000 / 20 = 15.000 por unidad, igual.
+  assert.equal(M.get(it("conc:confección").unitSim), $(15000));
+  // Serigrafía por mí: 10.000 fijos ÷ 100 u.
+  assert.equal(M.get(it("estampa:serigrafia_propia").unitSim), $(100));
+  // Avíos: 100 u. × 2 = 200 avíos > 100 comprados → cada prenda paga 2 × 200 = 400.
+  assert.equal(M.get(it("avio:81").unitSim), $(400));
+  assert.equal(it("avio:81").sinDesperdicioDesde, 50);
+  // Con 30 u. todavía alcanza la compra: 20.000 ÷ 30.
+  assert.equal(Math.round(M.get(simulacionCostos(I, 2, { unidades: 30 }).items.find((x) => x.key === "avio:81").unitSim)), Math.round($(20000) / 30));
+  // La campaña (fija) se divide por las unidades nuevas.
+  assert.equal(Math.round(M.get(s.lineas.campana.unit)), Math.round(M.get(tandaCosts(I, 2).lineas.campana.total) / 100));
+  // Cambiar el precio del kilo de tela.
+  const s2 = simulacionCostos(I, 2, { unidades: 100, cambios: { "tela:tela": { precioKg: $(40000), nombre: "Frisa otro proveedor" } } });
+  const t2 = s2.items.find((x) => x.key === "tela:tela");
+  assert.equal(M.get(t2.unitSim), $(20000));
+  assert.equal(t2.nombre, "Frisa otro proveedor");
+  assert.equal(t2.modificado, true);
+});
+
+test("Período personalizado: del día al día", () => {
+  assert.equal(inPeriod("2026-10-05", "2026-10-01..2026-10-15"), true);
+  assert.equal(inPeriod("2026-10-16", "2026-10-01..2026-10-15"), false);
+  assert.equal(inPeriod("2026-09-30", "2026-09-20..2026-10-02"), true);
 });

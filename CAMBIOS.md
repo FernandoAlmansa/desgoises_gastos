@@ -10,14 +10,68 @@ Cada entrada dice **qué cambió para quien usa la app**, **por qué**, y al fin
 ## Estado actual
 
 - **Publicación:** automática. Desde el 26/10, Cloudflare (Settings → Build) está conectado al repositorio de GitHub, rama `main`: cada vez que se sube algo, la app se publica sola en uno o dos minutos. Ya no hace falta `npx wrangler deploy`.
-- **Versión de la base de datos:** v5 (envíos y cadetes, envíos vinculados a telas o moldes, conceptos de moldería, prendas entregadas en campañas). Se actualiza sola en la primera visita después de publicar.
+- **Versión de la base de datos:** v6 (tipo de publicidad, ventas y avíos por prenda en cada producto de un gasto, simulaciones de costos unitarios). Se actualiza sola en la primera visita después de publicar.
 - **Pendientes / dudas abiertas:**
   - **Prendas entregadas en la colección:** se muestran en el balance pero **no** se suman al costo total, porque fabricarlas ya está contado en Producción (si no, se contaría dos veces). Confirmar con el usuario que está bien así.
   - El packaging vinculado se suma en el producto, pero **no** en el total de la colección (el usuario no lo puso en la lista del balance de la colección).
-  - Si una publicidad se reparte entre productos de **colecciones distintas**, en cada colección se cuenta el gasto entero (no solo su parte).
-  - Esta computadora no tiene Node: los cambios del 27/10 se probaron con un servidor de prueba en Python y datos de ejemplo, no con `npm run dev`. Las pruebas de `test/calc.test.js` se corrieron en el navegador.
+  - Las muestras siguen teniendo el concepto **"Cadete"**: ahora que los envíos se suman dentro de cada concepto, quizás convenga archivarlo también (no se tocó porque el pedido fue solo para producción).
+  - La publicidad cargada antes del 28/10 quedó como **Visibilidad / tráfico** (era la forma en que se repartía). Si alguna era de conversión, hay que editarla y poner las ventas.
+  - Desde el 28/10 esta computadora tiene Node: las pruebas se corren con `npm test` y la app local con `npm run dev` (se instalaron las dependencias; `.dev.vars` con `APP_KEY=prueba`).
 
 ---
+
+## 2026-10-28 — Publicidad de conversión y de visibilidad, simulaciones de costos unitarios, producción para varios productos, avíos y período personalizado
+
+**Qué cambió**
+- **Resumen**
+  - **Período personalizado:** debajo de Mes / Año, el botón con el calendario abre "Desde" y "Hasta". Todo el Resumen (totales, balance, conclusión) usa ese rango. "Volver a ver por mes" o tocar Mes/Año lo deja como antes.
+  - **Campañas de contenido** y **Publicidad** ahora se despliegan igual que Muestras y Moldería (flechita a la derecha).
+  - Al desplegar Publicidad se ven primero **Conversión** y **Visibilidad / Tráfico**; tocando cada una, cuánto le tocó a cada producto.
+  - En Producción, un gasto compartido entre productos aparece repartido en cada uno.
+- **Carga de gastos**
+  - **Publicidad:** primero pregunta si es **De conversión** o **Visibilidad / Tráfico**.
+    - Conversión: se eligen los productos (o la colección, que se abre en sus productos) y después **"¿Cuántas se vendieron?"** de cada uno. El gasto se reparte según esas ventas.
+    - Visibilidad / tráfico: como antes, se reparte por unidades producidas.
+  - **Producción de ropa** se puede cargar a **varios productos** (por ejemplo, una estampa por mí que sirve para dos prendas): se reparte por unidades y en cada producto se ve su parte "de $ total".
+  - **Avíos:** al elegir el concepto aparecen "¿Cuántos avíos compraste?" y "¿Cuántos lleva cada prenda?" de cada producto (los dos opcionales). Con varios productos se reparte según lo que usa cada uno.
+  - **Envíos:** se sumó **Flete** (con una camioneta), entre Expreso y Cadete.
+- **Ficha del producto**
+  - Con varias tandas aparece el chip **"Balance general"**: todas las tandas juntas, con un cuadro por tanda (unidades, directo y por unidad), el balance, la tela y los conceptos.
+  - En el Balance, la publicidad se separa en **Publicidad de conversión** (con el costo por venta promedio) y **Publicidad de visibilidad / tráfico** (por unidad).
+  - El **costo directo por unidad** suma el costo por venta de la conversión (no lo gastado ÷ unidades producidas).
+  - Conceptos de producción: se archivó **"Envíos y cadetes"** (ahora cada envío va dentro de su concepto).
+  - Abajo de todo: las **simulaciones guardadas**, el botón **"Simular costos unitarios produciendo en X cantidad / distintos proveedores"** y después el historial de cambios.
+- **Simulación de costos unitarios**
+  - Se elige la cantidad y se abre una pantalla igual a la del producto: arriba la foto chica y centrada, "Simulación N · costos unitarios", el nombre, las unidades (tocándolas se cambian) y una **descripción** para anotar qué cambia.
+  - Debajo, **Directo por unidad** simulado, el real y la diferencia; después el Balance y los conceptos, cada uno con su valor por unidad simulado y el real en chiquito.
+  - **"Cambiar proveedores / costos"**: Tela (cada tela: nombre y precio por kg; el valor por unidad sale del consumo por prenda × el kilo), envíos de tela, Corte, Confección, Lavadero, los 4 métodos de **Estampa** (los que no se usan dicen "No corresponde"; serigrafía por mí es un total) y **Avíos** (costo total y precio de cada avío). Lo cambiado queda "(modificado ✓)". Con **Guardar** se vuelve a la simulación recalculada.
+  - "Guardar simulación" la deja abajo de todo en la ficha del producto; se puede abrir, cambiar o borrar.
+- **Campaña:** arriba, más chico: la colección (se toca para ir), las fotitos de los productos participantes con cuántos son y cuántas unidades, el total y "Gastos $ X + prendas entregadas $ Y". Los botones de cargar gasto y prenda entregada pasaron **al final**.
+- **Colección → Publicidad de la colección:** ahora junta toda la publicidad de sus productos. El cuadro tiene Producto, Unidades, **Conversión** (costo por venta y, entre paréntesis, las ventas) y **Visibilidad** (lo asignado y, abajo, por unidad). Debajo, la lista de cargas.
+- **Gestionar → Publicidad** (debajo de Moldería): todos los productos por colección, con su total de publicidad, conversión $/venta y visibilidad $/u. Al tocar uno: los dos tipos por separado y un cuadro con cada carga (cuánto le tocó, ventas o unidades, y por venta o por unidad).
+- **Detalle de un gasto:** muestra el tipo de publicidad y, si se repartió entre productos, cuánto le tocó a cada uno (con ventas o avíos por prenda).
+
+**Por qué**
+- Pedido del usuario con 12 capturas y varios textos. La publicidad para vender no cuesta lo mismo por prenda si se vendió 1 o 30; y la simulación sirve para ver cuánto bajaría el costo produciendo más o cambiando proveedores.
+
+**Decisiones**
+- Confirmadas con el usuario: el costo por venta se promedia **ponderado por ventas** (todo lo gastado ÷ todo lo vendido; ej.: 80.000 con 10 ventas y 9.000 con 1 → 8.091) y las simulaciones **se actualizan solas** (guardan solo unidades, cambios y descripción).
+- Una carga de conversión **sin ventas** se reparte por unidades producidas y sube el costo por venta (la plata se gastó igual).
+- La conversión es por **producto** (todas sus tandas). La plata de cada carga va a la tanda abierta más reciente de cada producto.
+- Simulación: se basa en la tanda que se está mirando (desde el Balance general, en la más reciente con cantidad). Las campañas, la visibilidad, las muestras y la moldería mantienen su total y se dividen por las unidades nuevas; la conversión y el packaging mantienen su unitario. En la simulación, la conversión total = costo por venta × unidades.
+- **Avíos:** en la realidad, cada producto absorbe la compra entera (o su parte, si son varios, según lo que usa). En la simulación: costo = el mayor entre su parte de la compra y unidades × avíos por prenda × precio de cada avío. Si no se cargó cuántos se compraron o cuántos lleva cada prenda, se toma como total fijo.
+- Un gasto repartido con **un solo participante** va entero a él, aunque todavía no tenga cantidad.
+- Ahora la colección suma solo la parte de un gasto compartido con productos de otra colección (antes contaba el gasto entero). Se sacó ese pendiente de la lista.
+- Conceptos de producción sin cargar aparecen "Sin cargar" en la simulación (y se les puede poner un costo); los métodos de estampa sin usar, "No corresponde".
+
+**Notas técnicas**
+- Esquema v6 (`src/schema.js`): `gastos.publi_tipo` (`conversion` | `visibilidad`, lo existente pasa a `visibilidad`), `gasto_tandas.ventas` y `gasto_tandas.por_prenda`, tabla `simulaciones` (producto, tanda, número, unidades, descripción, `cambios` en JSON) y se archiva el concepto de producción "Envíos y cadetes".
+- `gasto_tandas`: con varios productos el gasto no tiene `tanda_id` y se reparte (`_multi`); con uno solo conserva su `tanda_id` y la fila solo guarda ventas o avíos por prenda.
+- Worker: acepta `publi_tipo`, `flete`, la tabla `simulaciones` (valida `cambios` como JSON de hasta 20.000 caracteres) y `PUT /api/gastos/:id/tandas` con `{ tandas: [{ tanda_id, ventas, por_prenda }] }` (sigue aceptando `tanda_ids`). Borrar un producto o una tanda borra sus simulaciones.
+- `calc.js`: `repartoInfo`, `partesDeTanda`, `gastosProduccion`, `partesReparto` (las partes de un gasto repartido como gastos con `_reparto`), `multiInfo` reparte por ventas (conversión) o por unidades × avíos por prenda, `conversionProducto`, `publicidadProducto`, `productoBalance`, `simulacionCostos`, `esRango`/`perDesde`/`perHasta` (períodos `AAAA-MM-DD..AAAA-MM-DD`), `PUBLI`, `publiTipo`, `esAvio`. `tandaCosts` (con caché) devuelve `lineas.publicidad.{visibilidad, conversion, pendientes}`, `lineas.produccion.pendientes` y `directoUnit`. `balancePeriodo` devuelve `publicidad.tipos`. `coleccionCosts` suma producción y publicidad por tanda y devuelve `lineas.publicidad.porProducto`.
+- `app.js`: vistas `vPublicidad`, `vPublicidadProducto` (`#/publicidad/:id`), `vSimulacion` y `vSimCostos` (`#/simulacion/:id` y `/costos`; la nueva es `#/simulacion/nueva` hasta guardarla), `balanceProducto` y `conceptosProduccion` (compartidos por tanda y balance general), `elegirRango`. Íconos nuevos: van, calendar, target, eye.
+- 6 pruebas nuevas (29 en total, todas pasan con `npm test`). Probado con `npm run dev` y datos de ejemplo en tamaño de celular: Resumen (período personalizado y desplegables), campaña, colección, ficha con balance general, simulación (crear, cambiar tela y lavadero, guardar), carga de publicidad de conversión con ventas, flete y producción para varios productos con avíos.
+- Caché de la app `dg-v6`.
 
 ## 2026-10-27 (2) — Encuadre de fotos, estado automático, moldería compartida, envíos y cadetes, otros gastos, prendas entregadas
 

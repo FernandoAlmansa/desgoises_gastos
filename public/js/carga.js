@@ -1,7 +1,7 @@
 // Carga y edición de un gasto: Monto → categoría → selección → detalle → guardar.
 import {
   CATEGORIAS, CAT, MENU_CARGA, ENVIO, ENVIO_TXT, pagoInfo, tandaColeccionId, unidades, esTela, esEstampa, esMolde, ESTAMPA,
-  envioPorCompra, destinoTexto, primeraTanda,
+  envioPorCompra, destinoTexto, primeraTanda, PUBLI, esAvio,
 } from "./calc.js";
 import {
   icon, esc, $, $$, money, parseAmount, liveFormat, centsToInput, today, fmtDate, api, toast, sheet, busy,
@@ -52,15 +52,29 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   const cat = () => CAT[st.categoria];
   // Publicidad o moldería repartida entre varios productos: se guardan las tandas elegidas aparte.
   // Envío vinculado a compras de tela o moldería: se guardan esas compras.
+  // Datos de cada producto del gasto (por tanda): ventas en la publicidad de conversión y avíos que lleva cada prenda.
+  st.pesos = new Map();
   if (editing) {
     st.multi = I().tandasDeGasto.get(gasto.id)?.slice() || null;
     const refs = I().vinculosDe.get(gasto.id);
     st.vinc = refs ? new Set(refs.map((r) => r.id)) : null;
+    for (const f of I().filasDeGasto.get(gasto.id) || []) st.pesos.set(f.tanda_id, { ventas: f.ventas, por_prenda: f.por_prenda });
   }
+  if (st.categoria === "publicidad" && !st.publi_tipo && editing) st.publi_tipo = "visibilidad";
 
   function clearDestino() {
     for (const k of ["muestra_id", "producto_id", "tanda_id", "campana_id", "opcion_id", "coleccion_id", "concepto", "cantidad", "kg", "multi", "sel", "vinc"]) st[k] = null;
+    st.pesos = new Map();
   }
+  const esConv = () => st.categoria === "publicidad" && st.publi_tipo === "conversion";
+  const esAvioCarga = () => st.categoria === "produccion" && !st.envio && esAvio(st.concepto);
+  // Tandas del gasto: las elegidas (varios productos) o la única.
+  const tandasSel = () => (st.multi?.length ? st.multi : st.tanda_id ? [st.tanda_id] : []);
+  // De cada producto, la tanda abierta más reciente (o la última, si están todas cerradas).
+  const tandaActual = (pid) => {
+    const ts = (I().tandasDeProducto.get(pid) || []).slice().sort((a, b) => b.id - a.id);
+    return (ts.find((t) => !t.cerrada) || ts[0])?.id;
+  };
 
   function crumbs() {
     const items = [];
@@ -69,8 +83,13 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       items.push(["envio", ENVIO[st.envio]]);
       if (st.concepto) items.push(["envioConc", st.concepto]);
     } else if (st.categoria) items.push([CAT[st.categoria]?.otros ? "otros" : "monto", cat()?.corto || cat()?.nombre]);
+    if (st.categoria === "publicidad" && st.publi_tipo) items.push(["publiTipo", PUBLI[st.publi_tipo]]);
     const dest = destinoNombre();
     if (dest) items.push([st.vinc?.size ? "vinculos" : "destino", dest]);
+    if (esConv() && dest && st.step !== "ventas") {
+      const v = tandasSel().reduce((s, t) => s + (st.pesos.get(t)?.ventas || 0), 0);
+      items.push(["ventas", `${fmtInt(v)} ${v === 1 ? "venta" : "ventas"}`]);
+    }
     if (st.tanda_id && cat()?.tanda) {
       const t = I().tanda.get(st.tanda_id);
       if (t && (I().tandasDeProducto.get(t.producto_id) || []).length > 1) items.push(["tanda", t.nombre]);
@@ -104,6 +123,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     else if (st.step === "envioConc") renderEnvioConc();
     else if (st.step === "vinculos") renderVinculos();
     else if (st.step === "otros") renderOtros();
+    else if (st.step === "publiTipo") renderPubliTipo();
+    else if (st.step === "ventas") renderVentas();
     else if (st.step === "destino") renderDestino();
     else if (st.step === "tanda") renderTanda();
     else if (st.step === "detalle") renderDetalle();
@@ -148,7 +169,9 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       if (k === "envio") return go("envio");
       if (k === "otros") return go("otros");
       const keepDestino = !st.envio && st.categoria === k && (destinoNombre() || !CAT[k].destino);
-      if (!keepDestino) { clearDestino(); st.envio = null; st.categoria = k; }
+      if (!keepDestino) { clearDestino(); st.envio = null; st.categoria = k; st.publi_tipo = null; }
+      // Publicidad: primero se elige si es de conversión o de visibilidad/tráfico.
+      if (k === "publicidad" && (!keepDestino || !st.publi_tipo)) return go("publiTipo");
       if (keepDestino || !cat().destino) go("detalle");
       else go("destino");
     }));
@@ -169,7 +192,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
   function renderEnvio() {
     body.innerHTML = `${crumbs()}
       <h3 class="h" style="margin:0;font-size:20px">¿Cómo se mandó?</h3>
-      ${opcionRows([["correo", "Correo", "mail"], ["expreso", "Expreso", "truck"], ["cadete", "Cadete", "bike"]]
+      ${opcionRows([["correo", "Correo", "mail"], ["expreso", "Expreso", "truck"], ["flete", "Flete", "van"], ["cadete", "Cadete", "bike"]]
         .map(([key, nombre, ic]) => ({ key, nombre, icon: ic, on: st.envio === key })), "env")}
       <p class="hint" style="margin:0">No es una categoría aparte: el envío se suma al concepto que elijas (tela, molde, corte…) en la muestra, producto o campaña que corresponda.</p>`;
     foot.parentElement.hidden = true;
@@ -259,6 +282,72 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     $("#v-dest", body)?.addEventListener("click", () => { st.vinc = null; go("destino"); });
   }
 
+  /* ---------- Publicidad: de conversión o de visibilidad/tráfico ---------- */
+  function renderPubliTipo() {
+    body.innerHTML = `${crumbs()}
+      <h3 class="h" style="margin:0;font-size:20px">¿Qué tipo de publicidad?</h3>
+      ${opcionRows([
+        { key: "conversion", nombre: "De conversión", icon: "target", sub: "Anuncios para vender. Después ponés cuántas se vendieron de cada producto.", on: st.publi_tipo === "conversion" },
+        { key: "visibilidad", nombre: "Visibilidad / Tráfico", icon: "eye", sub: "No genera ventas directas. Se reparte según las unidades producidas.", on: st.publi_tipo === "visibilidad" },
+      ], "ptipo")}
+      <p class="hint" style="margin:0">Quedan separadas: el costo por venta de la conversión se promedia entre cargas; la visibilidad nunca se mezcla con ese promedio.</p>`;
+    foot.parentElement.hidden = true;
+    $$("[data-ptipo]", body).forEach((b) => (b.onclick = () => {
+      st.publi_tipo = b.dataset.ptipo;
+      if (st.publi_tipo === "conversion") {
+        // La conversión se carga por producto: si venía una colección, se abre en sus productos.
+        if (st.coleccion_id) return elegirProductosConv(productosDeColeccion(st.coleccion_id));
+        return go(tandasSel().length ? "ventas" : "destino");
+      }
+      go(destinoNombre() ? "detalle" : "destino");
+    }));
+  }
+
+  const productosDeColeccion = (colId) => {
+    const i = I();
+    return [...new Set(i.D.tandas.filter((t) => tandaColeccionId(i, t) === colId).map((t) => t.producto_id))]
+      .filter((pid) => i.producto.get(pid) && !i.producto.get(pid).archivado);
+  };
+  // Conversión: un producto conserva su tanda; varios quedan repartidos (las ventas de cada uno deciden cuánto le toca).
+  function elegirProductosConv(ids) {
+    if (!ids.length) { toast("Esa colección todavía no tiene productos", true); return; }
+    const pesos = st.pesos;
+    clearDestino();
+    if (ids.length === 1) { st.producto_id = ids[0]; st.tanda_id = tandaActual(ids[0]); }
+    else st.multi = ids.map(tandaActual).filter(Boolean);
+    st.sel = new Set(ids);
+    for (const t of tandasSel()) if (pesos.has(t)) st.pesos.set(t, pesos.get(t));
+    go("ventas");
+  }
+
+  function renderVentas() {
+    const i = I();
+    const ts = tandasSel().map((id) => i.tanda.get(id)).filter(Boolean);
+    body.innerHTML = `${crumbs()}
+      <h3 class="h" style="margin:0;font-size:20px">¿Cuántas se vendieron?</h3>
+      <p class="hint" style="margin:0">De cada producto, las ventas que trajo este gasto (lo que te dice Meta). Se reparte según eso.</p>
+      <div class="card flush"><ul class="list">${ts.map((t) => {
+        const p = i.producto.get(t.producto_id);
+        const v = st.pesos.get(t.id)?.ventas;
+        return `<li><label class="row" for="v-${t.id}">${p?.foto_id ? `<span class="thumb"><img src="${fileUrl(p.foto_id, true)}" alt="" loading="lazy"></span>` : `<span class="ico-box">${icon("shirt")}</span>`}
+          <span class="row-main"><span class="row-title wrap">${esc(p?.nombre || "Producto")}</span><span class="row-sub">${esc(i.coleccion.get(tandaColeccionId(i, t))?.nombre || "Sin colección")}</span></span>
+          <input id="v-${t.id}" class="input num-in" data-v="${t.id}" inputmode="numeric" placeholder="0" value="${v ? v : ""}" aria-label="Ventas de ${esc(p?.nombre || "")}"></label></li>`;
+      }).join("")}</ul></div>
+      <p class="hint" style="margin:0">Si no se vendió nada, dejalo en 0: la plata se reparte por unidades producidas y sube el costo por venta.</p>`;
+    const total = () => $$("[data-v]", body).reduce((s, x) => s + (Number(x.value) || 0), 0);
+    const seguir = () => {
+      const n = total();
+      foot.innerHTML = `<button class="btn block" id="v-next">Seguir · ${fmtInt(n)} ${n === 1 ? "venta" : "ventas"}</button>
+        ${n ? `<p class="hint" style="margin:8px 0 0;text-align:center">${money(st.monto / n, st.moneda, true)} por venta en esta carga</p>` : ""}`;
+      $("#v-next", foot).onclick = () => {
+        for (const x of $$("[data-v]", body)) st.pesos.set(Number(x.dataset.v), { ...(st.pesos.get(Number(x.dataset.v)) || {}), ventas: Number(x.value) || 0 });
+        go("detalle");
+      };
+    };
+    $$("[data-v]", body).forEach((x) => (x.oninput = () => { x.value = x.value.replace(/\D/g, ""); seguir(); }));
+    seguir();
+  }
+
   /* ---------- Otros gastos: postventa, comisiones y cobros, administración e impuestos ---------- */
   function renderOtros() {
     body.innerHTML = `${crumbs()}
@@ -309,6 +398,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     body.innerHTML = `
       ${crumbs()}
       <h3 class="h" style="margin:0;font-size:20px">${multi ? (c.coleccion ? "¿Qué producto/s o colección?" : "¿Qué producto/s?") : txt.titulo}</h3>
+      ${multi && c.key === "produccion" ? `<p class="hint" style="margin:-4px 0 0">Elegí varios si el gasto sirve para más de uno (por ejemplo, una estampa compartida): se reparte según las unidades de cada uno.</p>` : ""}
       ${items.length + cols.length > 6 ? `<div class="search">${icon("search")}<input class="input" id="d-q" type="search" placeholder="Buscar" aria-label="Buscar" autocomplete="off"></div>` : ""}
       ${multi ? `<div class="hero-label" style="margin-bottom:-8px">Uno o varios productos</div>` : ""}
       <div class="card flush">
@@ -344,18 +434,15 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         ${n > 1 ? `<p class="hint" style="margin:8px 0 0;text-align:center">Se reparte entre ellos según las unidades de cada uno.</p>` : ""}`;
       $("#d-next", foot).onclick = () => {
         const ids = [...st.sel];
+        if (esConv()) return elegirProductosConv(ids);
         if (ids.length === 1) return pick(ids[0]);
         const i = I();
         const concepto = st.concepto;
         clearDestino();
         st.concepto = concepto;
-        // Publicidad: de cada producto, la tanda abierta más reciente (o la última, si están todas cerradas).
+        // Publicidad y producción: de cada producto, la tanda abierta más reciente (o la última, si están todas cerradas).
         // Moldería: es desarrollo, va a la primera tanda de cada producto.
-        st.multi = ids.map((pid) => {
-          if (c.key === "molderia") return primeraTanda(i, pid)?.id;
-          const ts = (i.tandasDeProducto.get(pid) || []).slice().sort((a, b) => b.id - a.id);
-          return (ts.find((t) => !t.cerrada) || ts[0])?.id;
-        }).filter(Boolean);
+        st.multi = ids.map((pid) => (c.key === "molderia" ? primeraTanda(i, pid)?.id : tandaActual(pid))).filter(Boolean);
         st.sel = new Set(ids);
         go("detalle");
       };
@@ -376,6 +463,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       $$("li[data-name]", body).forEach((li) => (li.hidden = v && !li.dataset.name.includes(v)));
     };
     $$("[data-pickcol]", body).forEach((b) => (b.onclick = () => {
+      if (esConv()) return elegirProductosConv(productosDeColeccion(Number(b.dataset.pickcol)));
       const concepto = st.concepto;
       clearDestino();
       st.concepto = concepto;
@@ -516,9 +604,18 @@ export function openCarga(ctx, gasto = null, preset = {}) {
         <label class="row" id="f-propia-wrap" style="border:0;padding:0;min-height:44px" ${stampBase() === "serigrafia" ? "" : "hidden"}>
           <input type="checkbox" id="f-propia" ${st.estampa === "serigrafia_propia" ? "checked" : ""} style="width:22px;height:22px">
           <span class="row-main"><span class="row-title">Estampado por mí</span><span class="row-sub" style="white-space:normal">Tildalo si la estampaste vos. Cargá cada compra (tintas, shablón…) como un gasto aparte.</span></span></label></div>` : ""}
-      ${st.categoria === "packaging" ? `<div class="field"><label for="f-cant">Cantidad de unidades compradas</label>
-        <input id="f-cant" class="input" inputmode="numeric" placeholder="Ej.: 5.000" value="${st.cantidad ? esc(st.cantidad.toLocaleString("es-AR")) : ""}">
+      ${st.categoria === "packaging" || (st.categoria === "produccion" && !st.envio) ? `<div class="field" id="f-cant-wrap" ${st.categoria === "packaging" || esAvioCarga() ? "" : "hidden"}>
+        <label for="f-cant">${st.categoria === "packaging" ? "Cantidad de unidades compradas" : "¿Cuántos avíos compraste? (opcional)"}</label>
+        <input id="f-cant" class="input" inputmode="numeric" placeholder="Ej.: ${st.categoria === "packaging" ? "5.000" : "100"}" value="${st.cantidad ? esc(st.cantidad.toLocaleString("es-AR")) : ""}">
         <span class="hint" id="f-unit"></span></div>` : ""}
+      ${st.categoria === "produccion" && !st.envio ? `<div class="field" id="f-pp-wrap" ${esAvioCarga() ? "" : "hidden"}><span class="label">¿Cuántos lleva cada prenda? (opcional)</span>
+        <div class="card flush"><ul class="list">${tandasSel().map((tid) => {
+          const p = i.producto.get(i.tanda.get(tid)?.producto_id);
+          const v = st.pesos.get(tid)?.por_prenda;
+          return `<li><label class="row" for="pp-${tid}"><span class="row-main"><span class="row-title wrap">${esc(p?.nombre || "Producto")}</span></span>
+            <input id="pp-${tid}" class="input num-in" data-pp="${tid}" inputmode="decimal" placeholder="—" value="${v ? esc(fmtKg(v, 2)) : ""}" aria-label="Avíos por prenda de ${esc(p?.nombre || "")}"></label></li>`;
+        }).join("")}</ul></div>
+        <span class="hint">Con lo que compraste y lo que lleva cada prenda, la simulación sabe desde cuántas unidades no hay desperdicio.${tandasSel().length > 1 ? " Entre varios productos se reparte según lo que usa cada uno." : ""}</span></div>` : ""}
       ${st.categoria === "suscripciones" ? `<div class="field"><span class="label">Período que cubre este pago</span>
         <div class="chips" id="f-cubre">${[[1, "1 mes"], [3, "3 meses"], [6, "6 meses"], [12, "1 año"]].map(([n, t]) =>
           `<button type="button" class="chip" data-cubre="${n}" aria-pressed="${(st.cubre_meses || 1) === n}">${t}</button>`).join("")}</div>
@@ -567,6 +664,10 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       if (wrap) wrap.hidden = !esTela(st.concepto);
       const sw = $("#f-stamp-wrap", body);
       if (sw) sw.hidden = !esEstampa(st.concepto);
+      const cw = $("#f-cant-wrap", body);
+      if (cw && st.categoria === "produccion") cw.hidden = !esAvioCarga();
+      const pw = $("#f-pp-wrap", body);
+      if (pw) pw.hidden = !esAvioCarga();
       showDesc();
     });
     // Estampa: bordado, serigrafía o DTF. La serigrafía puede ser de un taller o hecha por uno mismo.
@@ -625,7 +726,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     const cant = $("#f-cant", body);
     const showUnit = () => {
       const n = Number(cant.value.replace(/\D/g, ""));
-      $("#f-unit", body).textContent = n > 0 ? `Precio por unidad: ${money(st.monto / n, st.moneda, true)}` : "";
+      $("#f-unit", body).textContent = n > 0 ? `Precio por ${st.categoria === "packaging" ? "unidad" : "avío"}: ${money(st.monto / n, st.moneda, true)}` : "";
     };
     if (cant) { cant.oninput = () => { const n = cant.value.replace(/\D/g, ""); cant.value = n ? Number(n).toLocaleString("es-AR") : ""; showUnit(); }; showUnit(); }
 
@@ -671,6 +772,7 @@ export function openCarga(ctx, gasto = null, preset = {}) {
     if ($("#f-fecha", body)) st.fecha = v("#f-fecha") || today();
     if ($("#f-prov", body)) st.proveedor = v("#f-prov").trim();
     if ($("#f-cant", body)) st.cantidad = Number(v("#f-cant").replace(/\D/g, "")) || null;
+    for (const x of $$("[data-pp]", body)) st.pesos.set(Number(x.dataset.pp), { ...(st.pesos.get(Number(x.dataset.pp)) || {}), por_prenda: parseKg(x.value) || null });
     if ($("#f-kg", body)) st.kg = parseKg(v("#f-kg"));
     if ($("#f-est", body)) st.estimado = $("#f-est", body).checked ? 1 : 0;
     if ($("#f-encant", body)) st.en_cantidad = $("#f-encant", body).checked ? 1 : 0;
@@ -690,7 +792,8 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       muestra_id: st.muestra_id, producto_id: st.producto_id, tanda_id: st.tanda_id, campana_id: st.campana_id, opcion_id: st.opcion_id,
       coleccion_id: st.coleccion_id, kg: esTela(st.concepto) && !st.envio ? st.kg : null, estampa: esEstampa(st.concepto) && !st.envio ? st.estampa || null : null,
       envio: st.envio || null, concepto: st.concepto, descripcion: st.descripcion, medio_pago: st.medio_pago, proveedor: st.proveedor,
-      comprobante_id: st.comprobante_id, cantidad: st.categoria === "packaging" ? st.cantidad : null,
+      comprobante_id: st.comprobante_id, cantidad: st.categoria === "packaging" || esAvioCarga() ? st.cantidad : null,
+      publi_tipo: st.categoria === "publicidad" ? st.publi_tipo || "visibilidad" : null,
       cubre_meses: st.categoria === "suscripciones" ? st.cubre_meses || 1 : null, estimado: st.estimado, en_cantidad: st.en_cantidad,
     };
     // Si la tanda viene del producto, la guardamos también para que sea fácil filtrar.
@@ -703,7 +806,11 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       saved = editing
         ? await api(`gastos/${gasto.id}`, { method: "PATCH", body: payload })
         : await api("gastos", { method: "POST", body: payload });
-      if (st.multi?.length || gasto?._multi) await api(`gastos/${saved.id}/tandas`, { method: "PUT", body: { tanda_ids: st.multi || [] } });
+      // Productos del gasto con sus datos: ventas (conversión) o avíos por prenda. Con uno solo, la fila solo guarda esos datos.
+      const conv = esConv(), avio = esAvioCarga();
+      const filas = tandasSel().map((t) => ({ tanda_id: t, ventas: conv ? st.pesos.get(t)?.ventas || 0 : null, por_prenda: avio ? st.pesos.get(t)?.por_prenda || null : null }));
+      const conDatos = st.multi?.length || filas.some((f) => f.ventas != null || f.por_prenda != null);
+      if (conDatos || I().filasDeGasto.has(saved.id)) await api(`gastos/${saved.id}/tandas`, { method: "PUT", body: { tandas: conDatos ? filas : [] } });
       const vinc = st.envio && st.vinc?.size ? [...st.vinc] : [];
       if (vinc.length || gasto?._vinc) await api(`gastos/${saved.id}/vinculos`, { method: "PUT", body: { ref_ids: vinc } });
       try { if (st.medio_pago) localStorage.setItem(LAST_MEDIO, st.medio_pago); } catch {}
@@ -721,13 +828,13 @@ export function openCarga(ctx, gasto = null, preset = {}) {
       <div class="ok-circle">${icon("check")}</div>
       <h3 style="margin:8px 0 0;font-size:22px">Gasto guardado</h3>
       <div class="hero-value money" style="font-size:32px">${money(st.monto, st.moneda)}</div>
-      <div class="muted">${esc([st.envio ? ENVIO[st.envio] : c?.nombre, destinoNombre(), st.concepto, esEstampa(st.concepto) && ESTAMPA[st.estampa]].filter(Boolean).join(" · "))}</div>
+      <div class="muted">${esc([st.envio ? ENVIO[st.envio] : c?.nombre, st.categoria === "publicidad" && PUBLI[st.publi_tipo], destinoNombre(), st.concepto, esEstampa(st.concepto) && ESTAMPA[st.estampa]].filter(Boolean).join(" · "))}</div>
       <div class="muted small">${esc(fmtDate(st.fecha))}${st.estadoPago !== "pagado" ? ` · ${st.estadoPago === "parcial" ? "Pago parcial" : "Pendiente de pago"}` : ""}</div>
     </div>`;
     foot.innerHTML = `<div class="btn-row"><button class="btn secondary" id="l-ok">Listo</button><button class="btn" id="l-otro">${icon("plus")} Cargar otro</button></div>`;
     $("#l-ok", foot).onclick = () => sh.close();
     $("#l-otro", foot).onclick = () => {
-      const keep = { fecha: st.fecha, medio_pago: st.medio_pago, moneda: st.moneda, envio: null };
+      const keep = { fecha: st.fecha, medio_pago: st.medio_pago, moneda: st.moneda, envio: null, publi_tipo: null, pesos: new Map() };
       for (const k of Object.keys(st)) delete st[k];
       Object.assign(st, { monto: null, categoria: null, estadoPago: "pagado", estimado: 0, en_cantidad: 0, cubre_meses: 1, ...keep });
       saved = null;

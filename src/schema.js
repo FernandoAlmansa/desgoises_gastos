@@ -1,7 +1,7 @@
 // Estructura de la base. Se aplica sola la primera vez que el Worker recibe un pedido.
 // Si más adelante cambia, subir SCHEMA_VERSION y agregar las sentencias nuevas al final de MIGRATIONS.
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const MIGRATIONS = {
   1: [
@@ -172,6 +172,29 @@ export const MIGRATIONS = {
       cantidad INTEGER NOT NULL,
       creado TEXT NOT NULL DEFAULT (datetime('now'))
     )`,
+  ],
+  6: [
+    // Publicidad de conversión (se reparte según lo vendido) o de visibilidad/tráfico (según las unidades producidas).
+    `ALTER TABLE gastos ADD COLUMN publi_tipo TEXT`,
+    `UPDATE gastos SET publi_tipo = 'visibilidad' WHERE categoria = 'publicidad'`,
+    // Datos de cada producto dentro de un gasto: ventas (publicidad de conversión) y avíos que lleva cada prenda.
+    // Con un solo producto el gasto conserva su tanda_id y la fila solo guarda esos datos; con varios, tanda_id queda vacío.
+    `ALTER TABLE gasto_tandas ADD COLUMN ventas INTEGER`,
+    `ALTER TABLE gasto_tandas ADD COLUMN por_prenda REAL`,
+    // Simulaciones de costos unitarios: guardan solo las unidades, lo que se cambió y la descripción.
+    // Todo lo demás sale de los datos reales de la tanda, así se recalculan solas.
+    `CREATE TABLE IF NOT EXISTS simulaciones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      producto_id INTEGER NOT NULL REFERENCES productos(id),
+      tanda_id INTEGER REFERENCES tandas(id),
+      numero INTEGER NOT NULL DEFAULT 1,
+      unidades INTEGER NOT NULL,
+      descripcion TEXT,
+      cambios TEXT,
+      creado TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+    // Los envíos ya se suman dentro de cada concepto: el concepto de producción "Envíos y cadetes" se archiva.
+    `UPDATE opciones SET archivada = 1 WHERE tipo = 'concepto_prod' AND (lower(nombre) LIKE 'env%' OR lower(nombre) LIKE '%cadete%')`,
   ],
 };
 
